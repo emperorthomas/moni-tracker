@@ -1,782 +1,761 @@
-import { useState, useRef, useEffect } from "react";
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend } from "recharts";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Legend, LineChart, Line, CartesianGrid } from "recharts";
 
-/* ═══════════════════════════════════════════════════════════
-   CONSTANTS
-═══════════════════════════════════════════════════════════ */
-const COLORS = ["#00C896","#FF6B6B","#FFD93D","#6C63FF","#FF9F43","#54A0FF","#5F27CD","#00D2D3","#FF6B9D","#C0392B"];
-const CURRENCIES = [
-  { code:"NGN", symbol:"₦",  name:"Nigerian Naira",    flag:"🇳🇬" },
-  { code:"USD", symbol:"$",  name:"US Dollar",          flag:"🇺🇸" },
-  { code:"EUR", symbol:"€",  name:"Euro",               flag:"🇪🇺" },
-  { code:"GBP", symbol:"£",  name:"British Pound",      flag:"🇬🇧" },
-  { code:"GHS", symbol:"₵",  name:"Ghanaian Cedi",      flag:"🇬🇭" },
-  { code:"KES", symbol:"KSh",name:"Kenyan Shilling",    flag:"🇰🇪" },
-  { code:"ZAR", symbol:"R",  name:"South African Rand", flag:"🇿🇦" },
-  { code:"CAD", symbol:"CA$",name:"Canadian Dollar",    flag:"🇨🇦" },
-  { code:"AUD", symbol:"A$", name:"Australian Dollar",  flag:"🇦🇺" },
-  { code:"INR", symbol:"₹",  name:"Indian Rupee",       flag:"🇮🇳" },
-];
-const CATEGORIES = {
-  income:  ["Salary","Freelance","Business","Investment","Gift","Other Income"],
-  expense: ["Food & Dining","Transport","Housing","Healthcare","Entertainment","Shopping","Education","Utilities","Other Expense"],
+/* ── helpers ── */
+const safeGet=(k,d)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch{return d;}};
+const safeSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}};
+const safeDel=(k)=>{try{localStorage.removeItem(k);}catch{}};
+
+const COLORS=["#00C896","#6C63FF","#FFD93D","#FF6B6B","#4ECDC4","#A78BFA","#F97316","#22D3EE","#FB923C","#34D399","#E879F9","#38BDF8"];
+const CURRENCIES={NGN:{sym:"₦",name:"Nigerian Naira"},USD:{sym:"$",name:"US Dollar"},GBP:{sym:"£",name:"British Pound"},EUR:{sym:"€",name:"Euro"},GHS:{sym:"₵",name:"Ghanaian Cedi"},KES:{sym:"KSh",name:"Kenyan Shilling"}};
+const CATEGORIES={
+  expense:["Food & Dining","Transport","Housing","Shopping","Entertainment","Healthcare","Utilities","Education","Gift & Donations","Business Expense","Electronics & Gadgets","Personal Care","Other Expense"],
+  income:["Salary","Freelance","Business Income","Investment Returns","Gift Received","Rental Income","Side Hustle","Other Income"]
 };
-const ALL_CATS = [...CATEGORIES.income, ...CATEGORIES.expense];
-const ONBOARDING = [
-  { icon:"💰", title:"Welcome to Moni Tracker", desc:"Your AI-powered financial companion. Track income and expenses — all in one place.", btn:"Let's Go" },
-  { icon:"🎙️", title:"Log with Voice or Text",   desc:'Say "Spent ₦5,000 on food" or type it. AI instantly categorises and saves it.', btn:"Nice!" },
-  { icon:"📊", title:"Smart Reports & Insights", desc:"See where your money goes with beautiful charts and personalised AI advice.", btn:"Get Started 🚀" },
-];
-const PLANS = {
-  free: { name:"Free", price:"₦0/mo",      color:"#00C896", features:["Unlimited transactions","AI categorisation","Reports & charts","Voice input","PDF export","Multi-currency"] },
-  pro:  { name:"Pro",  price:"₦2,500/mo",  color:"#6C63FF", features:["Everything in Free","Team access (up to 5)","Advanced analytics","Priority AI insights","Custom categories","Dedicated support"] },
-};
-const DEMO_TX = [
-  { id:"d1",  type:"income",  amount:150000, category:"Salary",        note:"Monthly salary",        date:"2026-05-01" },
-  { id:"d2",  type:"expense", amount:45000,  category:"Housing",       note:"Rent payment",          date:"2026-05-02" },
-  { id:"d3",  type:"expense", amount:12000,  category:"Food & Dining", note:"Groceries — Shoprite",  date:"2026-05-03" },
-  { id:"d4",  type:"income",  amount:35000,  category:"Freelance",     note:"Design project",        date:"2026-05-05" },
-  { id:"d5",  type:"expense", amount:8000,   category:"Transport",     note:"Uber rides",            date:"2026-05-06" },
-  { id:"d6",  type:"expense", amount:15000,  category:"Shopping",      note:"Clothes",               date:"2026-05-08" },
-  { id:"d7",  type:"expense", amount:7500,   category:"Entertainment", note:"Cinema & dinner",       date:"2026-05-10" },
-  { id:"d8",  type:"income",  amount:20000,  category:"Investment",    note:"Piggybank payout",      date:"2026-05-12" },
-  { id:"d9",  type:"expense", amount:5500,   category:"Healthcare",    note:"Pharmacy",              date:"2026-05-14" },
-  { id:"d10", type:"expense", amount:6000,   category:"Utilities",     note:"NEPA & internet",       date:"2026-05-16" },
-];
-const DEMO_USER = { id:"demo", name:"Demo User", email:"demo@moni.app", password:"demo123", plan:"free", joinDate:"2026-01-01" };
 
-/* ═══════════════════════════════════════════════════════════
-   HELPERS
-═══════════════════════════════════════════════════════════ */
-const fmt = (n, sym) => `${sym}${Number(n).toLocaleString()}`;
+/* ── SMART AMOUNT PARSER (v5 fix: no more iPhone 16 = ₦16) ──
+   Strategy:
+   1. Look for amount AFTER price keywords: "for", "cost", "spent", "worth", "paid", "at"
+   2. Expand shorthand: 3m → 3000000, 50k → 50000, "three million" → 3000000
+   3. Prefer numbers with ₦ sign or price keywords over bare model numbers
+   4. If text has model-number pattern (brand + short number < 100), skip those
+*/
+function smartParseAmount(text) {
+  let t = text;
 
+  // Step 1: expand written-out numbers (Nigerian common patterns)
+  const writtenMap = {
+    "one hundred thousand": 100000, "two hundred thousand": 200000, "three hundred thousand": 300000,
+    "four hundred thousand": 400000, "five hundred thousand": 500000, "six hundred thousand": 600000,
+    "seven hundred thousand": 700000, "eight hundred thousand": 800000, "nine hundred thousand": 900000,
+    "one million": 1000000, "two million": 2000000, "three million": 3000000, "four million": 4000000,
+    "five million": 5000000, "ten million": 10000000, "fifty thousand": 50000, "twenty thousand": 20000,
+    "thirty thousand": 30000, "forty thousand": 40000, "fifteen thousand": 15000, "ten thousand": 10000,
+    "five thousand": 5000, "two thousand": 2000, "one thousand": 1000, "hundred thousand": 100000,
+    "half million": 500000, "quarter million": 250000,
+  };
+  for (const [phrase, val] of Object.entries(writtenMap)) {
+    if (t.toLowerCase().includes(phrase)) {
+      t = t.toLowerCase().replace(phrase, String(val));
+    }
+  }
+
+  // Step 2: expand k/m shorthand
+  t = t.replace(/(\d+\.?\d*)\s*million\b/gi, (_,n) => String(parseFloat(n)*1000000));
+  t = t.replace(/(\d+\.?\d*)\s*thousand\b/gi, (_,n) => String(parseFloat(n)*1000));
+  t = t.replace(/(\d+\.?\d*)\s*m\b/gi, (_,n) => String(parseFloat(n)*1000000));
+  t = t.replace(/(\d+\.?\d*)\s*k\b/gi, (_,n) => String(parseFloat(n)*1000));
+
+  const lower = t.toLowerCase();
+
+  // Step 3: Find numbers that are DEFINITELY amounts (have ₦ sign right before/after)
+  const currencyMatch = t.match(/[₦$£€₵]\s?(\d[\d,\.]*)/);
+  if (currencyMatch) {
+    const amt = parseFloat(currencyMatch[1].replace(/,/g,""));
+    if (amt > 0) return amt;
+  }
+
+  // Step 4: Find amount AFTER price keywords
+  const priceKeywords = /\b(for|cost|costs|costing|spent|spend|paid|pay|worth|price|priced|at|about|around|approximately|roughly)\s+[₦$£€₵]?\s?(\d[\d,\.]*)/i;
+  const afterKeyword = t.match(priceKeywords);
+  if (afterKeyword) {
+    const amt = parseFloat(afterKeyword[2].replace(/,/g,""));
+    if (amt > 100) return amt; // model numbers are usually < 100 or 2-4 digits like "16", "14 Pro"
+  }
+
+  // Step 5: Find the LARGEST number in the string (most likely the price, not model number)
+  // But exclude numbers that look like model identifiers (directly attached to brand names)
+  const brandModelPattern = /\b(iphone|samsung|tecno|infinix|itel|huawei|xiaomi|oppo|vivo|realme|nokia|toyota|honda|lexus|benz|ford|hyundai|kia|ps|playstation|xbox|galaxy|redmi|poco|note)\s*\d+/gi;
+  const cleanedText = t.replace(brandModelPattern, (match) => {
+    // Replace the model number part with placeholder so it won't be picked
+    return match.replace(/\d+/g, "MODEL");
+  });
+
+  const allNums = [];
+  const numRx = /(\d[\d,\.]*)/g;
+  let m;
+  while ((m = numRx.exec(cleanedText)) !== null) {
+    const n = parseFloat(m[1].replace(/,/g,""));
+    if (!isNaN(n) && n > 0) allNums.push(n);
+  }
+
+  if (allNums.length === 0) return 0;
+
+  // Return largest number (most likely to be a price)
+  const largest = Math.max(...allNums);
+  return largest > 0 ? largest : 0;
+}
+
+/* ── LOCAL PARSER v5 ── */
 function localParse(text) {
   const lower = text.toLowerCase();
-  const expanded = text
-    .replace(/(\d+\.?\d*)\s*k\b/gi, (_,n)=>String(parseFloat(n)*1000))
-    .replace(/(\d+\.?\d*)\s*m\b/gi, (_,n)=>String(parseFloat(n)*1000000));
-  const m = expanded.match(/[\$£€₦₵₹]?\s?(\d[\d,\.]*)/);
-  const amount = m ? parseFloat(m[1].replace(/,/g,"")) : 0;
-  const isIncome = /\b(earn|receiv|got paid|salary|income|made|credit|profit|sold|sale|freelance revenue|paid me)\b/.test(lower);
+  const amount = smartParseAmount(text);
+
+  const isIncome = /\b(earn|receiv|got paid|salary|income|made|credit|profit|sold|sale|freelance revenue|paid me|transferred|transfer in|received|got)\b/.test(lower);
   const type = isIncome ? "income" : "expense";
   let category = type==="income" ? "Other Income" : "Other Expense";
+
+  // Electronics detection FIRST (before generic "buy/purchase" rules)
+  const electronicsRx = /\b(iphone|samsung|tecno|infinix|itel|huawei|xiaomi|oppo|vivo|realme|nokia|phone|smartphone|laptop|computer|tablet|ipad|macbook|dell|hp|lenovo|asus|tv|television|screen|monitor|headphone|earphone|airpod|speaker|camera|playstation|xbox|ps\d|console|gadget|electronics|charger|power bank|powerbank|memory card|hard drive|ssd|router|modem|printer|keyboard|mouse|watch|smartwatch)\b/;
+
   const rules=[
-    [/food|eat|restaurant|groceries|lunch|dinner|breakfast|bukka|market|shoprite|suya|rice|beans|pepper|snack/,"Food & Dining"],
-    [/uber|bolt|taxi|bus|transport|fuel|petrol|keke|okada|danfo|ride|traffic/,"Transport"],
-    [/rent|house|apartment|landlord|property/,"Housing"],
-    [/salary|paycheck|wage|payroll/,"Salary"],
-    [/freelance|project|client|design|contract|gig/,"Freelance"],
-    [/invest|dividend|stock|crypto|piggybank|cowrywise|shares/,"Investment"],
-    [/shop|cloth|fashion|shoe|bag|zara|jumia|buy|purchase/,"Shopping"],
-    [/netflix|movie|cinema|fun|entertain|spotify|concert|party/,"Entertainment"],
-    [/doctor|hospital|pharmacy|drug|health|clinic|medic/,"Healthcare"],
-    [/electric|nepa|phcn|water|internet|wifi|mtn|airtel|glo|data|bill|utility/,"Utilities"],
-    [/school|tuition|book|course|training|education/,"Education"],
-    [/church|tithe|offering|donate|gift/,"Gift"],
-    [/business|sale|product|revenue|profit/,"Business"],
+    [electronicsRx, "Electronics & Gadgets"],
+    [/\b(food|eat|restaurant|groceries|lunch|dinner|breakfast|bukka|market|shoprite|suya|rice|beans|pepper|snack|drink|beer|wine|water sachet|pure water|biscuit|indomie|bread|egg|chicken|fish|meat|vegetable|fruit|juice|soda|eatery|canteen|cafeteria)\b/,"Food & Dining"],
+    [/\b(uber|bolt|taxi|bus|transport|fuel|petrol|keke|okada|danfo|ride|traffic|brt|road|car wash|parking|vehicle|motorcycle|bike|tyre|mechanic|engine oil|auto|ferry|boat)\b/,"Transport"],
+    [/\b(rent|house|apartment|landlord|property|estate|hostel|lodge|accommodation|furniture|appliance|cleaning|maintenance|repair|generator|diesel|kerosene)\b/,"Housing"],
+    [/\b(salary|paycheck|wage|payroll|allowance|bonus|13th month)\b/,"Salary"],
+    [/\b(freelance|project|client|design|contract|gig|commission|consultation|service charge|professional)\b/,"Freelance"],
+    [/\b(invest|dividend|stock|crypto|piggybank|cowrywise|shares|interest|return|roi|forex)\b/,"Investment Returns"],
+    [/\b(shop|cloth|fashion|shoe|bag|zara|jumia|konga|primark|h&m|uniqlo|cloth|dress|shirt|trouser|jean|skirt|blouse|native|aso|cap|hat|belt|wallet|sunglass)\b/,"Shopping"],
+    [/\b(netflix|movie|cinema|fun|entertain|spotify|concert|party|outing|hangout|game|gaming|steam|club|bar|lounge|karaoke|bowling|event|ticket)\b/,"Entertainment"],
+    [/\b(doctor|hospital|pharmacy|drug|health|clinic|medic|medicine|test|scan|surgery|dental|eye|optical|malaria|paracetamol|lab|chemist)\b/,"Healthcare"],
+    [/\b(electric|nepa|phcn|water bill|internet|wifi|mtn|airtel|glo|9mobile|data|bill|utility|subscription|dstv|gotv|startimes|cable|toll|waste|sanitation)\b/,"Utilities"],
+    [/\b(school|tuition|book|course|training|education|exam|waec|jamb|neco|uni|university|college|study|lesson|tutorial|certification)\b/,"Education"],
+    [/\b(church|tithe|offering|donate|charity|gift|present|birthday|anniversary|wedding|funeral|contribution|levy|dues)\b/,"Gift & Donations"],
+    [/\b(business|sale|product|revenue|profit|stock|inventory|raw material|goods|wholesale|retail|trade|market stall)\b/,"Business Income"],
+    [/\b(hair|barber|salon|spa|massage|nails|manicure|pedicure|skincare|makeup|perfume|cream|lotion|deodorant|soap|shampoo|personal)\b/,"Personal Care"],
   ];
+
   for(const [rx,cat] of rules){ if(rx.test(lower)){ category=cat; break; } }
-  return { type, amount, category, note:text, date:new Date().toISOString().split("T")[0], confidence: amount>0?0.9:0.2 };
+
+  // Route to AI if: has brand+model pattern, or amount is 0, or unclear
+  const hasModelNumber = /\b(iphone|samsung|galaxy|tecno|infinix|macbook|ipad)\s*\d+/i.test(text);
+  const confidence = amount > 0 ? (hasModelNumber ? 0.6 : 0.9) : 0.2;
+
+  return { type, amount, category, note:text, date:new Date().toISOString().split("T")[0], confidence };
 }
 
-async function callAI(messages, maxTokens=800) {
-  // Try Vercel serverless first (production), fall back to direct call (Claude artifact)
+/* ── AI CALL ── */
+async function callAI(messages, apiKey) {
+  // Try Vercel serverless first
   try {
-    const r = await fetch("/api/ai", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({messages, maxTokens}) });
-    if(r.ok){ const d=await r.json(); return d.text||""; }
-  } catch{}
-  try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:maxTokens, messages })
+    const r = await fetch("/api/ai", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ messages, max_tokens:400 }),
     });
-    const d = await r.json();
-    if(d.error) return null;
-    return d.content?.[0]?.text||"";
-  } catch{ return null; }
+    if (r.ok) { const d=await r.json(); return d.content?.[0]?.text||""; }
+  } catch {}
+  // Fallback: direct Anthropic API
+  if (!apiKey) throw new Error("No API key");
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+    body: JSON.stringify({ model:"claude-haiku-3-5-20241022", max_tokens:400, messages }),
+  });
+  if (!r.ok) throw new Error(`API ${r.status}`);
+  const d=await r.json();
+  return d.content?.[0]?.text||"";
 }
 
-function exportPDF(transactions, currency, period, userName) {
-  const sym=currency.symbol;
-  const inc=transactions.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-  const exp=transactions.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-  const bal=inc-exp;
-  const rate=inc>0?Math.round((bal/inc)*100):0;
-  const catMap={};
-  transactions.filter(t=>t.type==="expense").forEach(t=>{ catMap[t.category]=(catMap[t.category]||0)+t.amount; });
-  const cats=Object.entries(catMap).sort((a,b)=>b[1]-a[1]);
-  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
-  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600&family=Syne:wght@700;800&display=swap');
-  body{font-family:'DM Sans',sans-serif;color:#1a1a2e;padding:40px;max-width:800px;margin:0 auto}
-  .hdr{background:linear-gradient(135deg,#0A0E1A,#1a1f35);color:#fff;border-radius:20px;padding:32px;margin-bottom:28px}
-  .logo{font-family:'Syne',sans-serif;font-size:28px;font-weight:800}.logo span{color:#00C896}
-  .meta{margin-top:10px;font-size:13px;color:rgba(255,255,255,0.5)}
-  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
-  .s{border-radius:14px;padding:16px;text-align:center}
-  .si{background:#f0fdf8;border:2px solid #00C896}.se{background:#fff5f5;border:2px solid #FF6B6B}
-  .sb{background:#f5f3ff;border:2px solid #6C63FF}.sr{background:#fefce8;border:2px solid #FFD93D}
-  .sl{font-size:10px;font-weight:700;color:#888;letter-spacing:.5px;margin-bottom:4px}
-  .sv{font-family:'Syne',sans-serif;font-size:18px;font-weight:800}
-  h3{font-family:'Syne',sans-serif;font-size:15px;margin:20px 0 10px;padding-bottom:6px;border-bottom:2px solid #f0f0f0}
-  table{width:100%;border-collapse:collapse}th{background:#f8f9fa;padding:8px;text-align:left;font-size:11px;color:#888;font-weight:700;letter-spacing:.5px}
-  td{padding:8px;font-size:12px;border-bottom:1px solid #f0f0f0}
-  .inc{color:#00C896;font-weight:700}.exp{color:#FF6B6B;font-weight:700}
-  .foot{margin-top:28px;text-align:center;font-size:11px;color:#ccc;border-top:1px solid #f0f0f0;padding-top:16px}
-  </style></head><body>
-  <div class="hdr"><div class="logo"><span>Moni</span> Tracker</div>
-  <div class="meta">${period.charAt(0).toUpperCase()+period.slice(1)} Report &nbsp;·&nbsp; ${userName} &nbsp;·&nbsp; ${currency.code} &nbsp;·&nbsp; ${new Date().toLocaleDateString("en-NG",{year:"numeric",month:"long",day:"numeric"})}</div></div>
-  <div class="stats">
-    <div class="s si"><div class="sl">INCOME</div><div class="sv" style="color:#00C896">${sym}${inc.toLocaleString()}</div></div>
-    <div class="s se"><div class="sl">EXPENSES</div><div class="sv" style="color:#FF6B6B">${sym}${exp.toLocaleString()}</div></div>
-    <div class="s sb"><div class="sl">BALANCE</div><div class="sv" style="color:#6C63FF">${sym}${bal.toLocaleString()}</div></div>
-    <div class="s sr"><div class="sl">SAVE RATE</div><div class="sv" style="color:#b45309">${rate}%</div></div>
-  </div>
-  <h3>Expense Breakdown</h3>
-  <table><tr><th>CATEGORY</th><th style="text-align:right">AMOUNT</th><th style="text-align:right">%</th></tr>
-  ${cats.map(([n,v])=>`<tr><td>${n}</td><td style="text-align:right;font-weight:600">${sym}${v.toLocaleString()}</td><td style="text-align:right;color:#888">${exp>0?Math.round((v/exp)*100):0}%</td></tr>`).join("")}
-  </table>
-  <h3>Transactions</h3>
-  <table><tr><th>DATE</th><th>CATEGORY</th><th>NOTE</th><th style="text-align:right">AMOUNT</th></tr>
-  ${transactions.slice(0,30).map(t=>`<tr><td>${t.date}</td><td>${t.category}</td><td style="color:#555">${t.note}</td><td style="text-align:right" class="${t.type==="income"?"inc":"exp"}">${t.type==="income"?"+":"-"}${sym}${Number(t.amount).toLocaleString()}</td></tr>`).join("")}
-  </table>
-  <div class="foot">Moni Tracker · AI-powered finance for Africa · monitracker.com · ${new Date().getFullYear()}</div>
-  </body></html>`;
-  const w=window.open("","_blank"); if(w){ w.document.write(html); w.document.close(); setTimeout(()=>w.print(),600); }
-}
-
-/* ═══════════════════════════════════════════════════════════
-   CSS
-═══════════════════════════════════════════════════════════ */
-const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Syne:wght@700;800&display=swap');
-*{box-sizing:border-box;margin:0;padding:0}
-::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:#0A0E1A}::-webkit-scrollbar-thumb{background:#00C896;border-radius:4px}
-.card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:18px;padding:20px;transition:border-color .25s}
-.card:hover{border-color:rgba(0,200,150,0.2)}
-.btn-green{background:#00C896;color:#0A0E1A;border:none;border-radius:13px;padding:15px 24px;font-family:'DM Sans',sans-serif;font-weight:700;font-size:15px;cursor:pointer;transition:all .2s;width:100%}
-.btn-green:hover:not(:disabled){background:#00E5AD;transform:translateY(-1px)}
-.btn-green:disabled{opacity:.5;cursor:not-allowed}
-.btn-ghost{background:transparent;color:#E8EAF0;border:1px solid rgba(255,255,255,0.15);border-radius:12px;padding:12px 18px;font-family:'DM Sans',sans-serif;font-size:14px;cursor:pointer;transition:all .2s}
-.btn-ghost:hover{border-color:#00C896;color:#00C896}
-.nav-btn{background:transparent;border:none;padding:8px 12px;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:11px;cursor:pointer;color:rgba(232,234,240,0.4);display:flex;flex-direction:column;align-items:center;gap:3px;transition:all .2s;flex:1}
-.nav-btn.active{background:rgba(0,200,150,0.12);color:#00C896}
-.field{width:100%;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:13px;padding:14px 16px;color:#E8EAF0;font-family:'DM Sans',sans-serif;font-size:15px;outline:none}
-.field:focus{border-color:#00C896}
-.field::placeholder{color:rgba(232,234,240,0.3)}
-textarea.field{resize:none}
-select.field{cursor:pointer}
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:300;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(6px)}
-.sheet{background:#141824;border-radius:24px 24px 0 0;padding:28px;width:100%;max-width:480px;max-height:88vh;overflow-y:auto}
-.fade{animation:fadeIn .3s ease}
-@keyframes fadeIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-.pulse{animation:pulse 1.4s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-.spin{animation:spin 1s linear infinite;display:inline-block}
-@keyframes spin{to{transform:rotate(360deg)}}
-.tag-i{background:rgba(0,200,150,.15);color:#00C896;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
-.tag-e{background:rgba(255,107,107,.15);color:#FF6B6B;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700}
-.section-label{font-size:11px;font-weight:700;color:rgba(232,234,240,.4);letter-spacing:.6px;margin-bottom:12px}
+/* ── STYLES ── */
+const GLOBAL_CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600;700&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0A0E1A;color:#E8EAF0;font-family:'DM Sans',sans-serif;min-height:100vh;overflow-x:hidden;}
+.app{max-width:430px;margin:0 auto;min-height:100vh;position:relative;}
+.card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:18px;padding:18px;margin-bottom:12px;}
+.field{width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:13px 15px;color:#E8EAF0;font-family:'DM Sans',sans-serif;font-size:15px;outline:none;resize:none;transition:border-color .2s;}
+.field:focus{border-color:rgba(0,200,150,.5);}
+.btn-green{background:linear-gradient(135deg,#00C896,#00A878);border:none;border-radius:14px;padding:13px 20px;color:#0A0E1A;font-family:'DM Sans',sans-serif;font-weight:700;font-size:15px;cursor:pointer;width:100%;transition:opacity .2s,transform .1s;}
+.btn-green:hover{opacity:.92;}
+.btn-green:active{transform:scale(.98);}
+.btn-green:disabled{opacity:.4;cursor:not-allowed;}
+.btn-ghost{background:transparent;border:1px solid rgba(255,255,255,.15);border-radius:14px;padding:11px 18px;color:#E8EAF0;font-family:'DM Sans',sans-serif;font-weight:600;font-size:14px;cursor:pointer;transition:all .2s;}
+.btn-ghost:hover{background:rgba(255,255,255,.05);}
+.section-label{font-family:'DM Sans',sans-serif;font-size:11px;font-weight:700;color:rgba(232,234,240,.35);letter-spacing:1.2px;text-transform:uppercase;margin-bottom:12px;}
+.nav-btn{background:transparent;border:none;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 10px;color:rgba(232,234,240,.35);font-family:'DM Sans',sans-serif;font-size:10px;font-weight:600;cursor:pointer;transition:color .2s;}
+.nav-btn.active{color:#00C896;}
+.fade{animation:fadeIn .3s ease;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+.pulse{animation:pulse 1.5s infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
+.spin{display:inline-block;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.shake{animation:shake .4s;}
+@keyframes shake{0%,100%{transform:translateX(0);}25%{transform:translateX(-6px);}75%{transform:translateX(6px);}}
+.notify{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:9999;padding:13px 22px;border-radius:14px;font-size:14px;font-weight:600;max-width:340px;text-align:center;animation:slideDown .3s ease;}
+@keyframes slideDown{from{opacity:0;transform:translate(-50%,-16px);}to{opacity:1;transform:translate(-50%,0);}}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(4px);}
+.modal{background:#131828;border-radius:24px 24px 0 0;padding:24px;width:100%;max-width:430px;max-height:80vh;overflow-y:auto;border-top:1px solid rgba(255,255,255,.1);}
+.voice-review{background:rgba(0,200,150,.06);border:1px solid rgba(0,200,150,.2);border-radius:14px;padding:14px;margin-top:10px;}
 `;
 
-/* ═══════════════════════════════════════════════════════════
-   MAIN COMPONENT
-═══════════════════════════════════════════════════════════ */
-export default function MoniTracker() {
-  // storage
-  const safeGet = (k) => { try{ const v=localStorage.getItem(k); return v?{value:v}:null; }catch{ return null; } };
-  const safeSet = (k,v) => { try{ localStorage.setItem(k,v); }catch{} };
-  const safeDel = (k)   => { try{ localStorage.removeItem(k); }catch{} };
+/* ── NOTIFICATION ── */
+let notifyTimer;
+function useNotify() {
+  const [msg,setMsg]=useState(null);
+  const notify=useCallback((text,type="success")=>{
+    clearTimeout(notifyTimer);
+    setMsg({text,type});
+    notifyTimer=setTimeout(()=>setMsg(null),3200);
+  },[]);
+  return [msg,notify];
+}
 
-  // auth state
-  const [users,       setUsers]       = useState([DEMO_USER]);
-  const [currentUser, setCurrentUser] = useState(null);
-  const [loggedIn,    setLoggedIn]    = useState(false);
-  const [screen,      setScreen]      = useState("loading"); // loading|landing|auth|onboard|app
-  const [authMode,    setAuthMode]    = useState("login");   // login|signup|forgot
-  const [authForm,    setAuthForm]    = useState({name:"",email:"",phone:"",password:"",newPassword:""});
-  const [authError,   setAuthError]   = useState("");
-  const [onboardStep, setOnboardStep] = useState(0);
-  const [storageReady,setStorageReady]= useState(false);
+/* ── FORMAT ── */
+const fmt=(n,sym)=>`${sym}${Math.abs(n).toLocaleString("en-NG")}`;
 
-  // app state
-  const [tab,          setTab]          = useState("dashboard");
+/* ── TX CARD ── */
+function TxCard({t,sym,onEdit,onDelete}){
+  const catIcons={
+    "Food & Dining":"🍔","Transport":"🚗","Housing":"🏠","Shopping":"🛍️",
+    "Entertainment":"🎬","Healthcare":"💊","Utilities":"⚡","Education":"📚",
+    "Gift & Donations":"🎁","Business Expense":"💼","Electronics & Gadgets":"📱",
+    "Personal Care":"💅","Salary":"💰","Freelance":"💻","Business Income":"📈",
+    "Investment Returns":"📊","Gift Received":"🎁","Rental Income":"🏢",
+    "Side Hustle":"⚡","Other Income":"💵","Other Expense":"💸",
+  };
+  return (
+    <div className="card" style={{padding:"13px 15px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div style={{display:"flex",alignItems:"center",gap:11}}>
+        <div style={{fontSize:22,width:38,height:38,background:"rgba(255,255,255,.05)",borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          {catIcons[t.category]||"💸"}
+        </div>
+        <div>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:2,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.note}</div>
+          <div style={{fontSize:11,color:"rgba(232,234,240,.35)"}}>{t.category} · {t.date}</div>
+        </div>
+      </div>
+      <div style={{textAlign:"right"}}>
+        <div style={{fontSize:15,fontWeight:700,color:t.type==="income"?"#00C896":"#FF6B6B"}}>{t.type==="income"?"+":"-"}{fmt(t.amount,sym)}</div>
+        <div style={{display:"flex",gap:6,marginTop:5,justifyContent:"flex-end"}}>
+          <button onClick={()=>onEdit(t)} style={{background:"transparent",border:"none",color:"rgba(232,234,240,.35)",cursor:"pointer",fontSize:13,padding:"2px 5px"}}>✏️</button>
+          <button onClick={()=>onDelete(t.id)} style={{background:"transparent",border:"none",color:"rgba(255,107,107,.4)",cursor:"pointer",fontSize:13,padding:"2px 5px"}}>🗑️</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── MAIN APP ── */
+export default function App() {
+  /* ── auth ── */
+  const [screen, setScreen] = useState("splash"); // splash|login|register|app|forgot
+  const [accounts, setAccounts] = useState(()=>safeGet("moni_accounts",[]));
+  const [currentUser, setCurrentUser] = useState(()=>safeGet("moni_user",null));
+  const [authForm, setAuthForm] = useState({name:"",email:"",phone:"",password:"",confirm:""});
+  const [authError, setAuthError] = useState("");
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetMsg, setResetMsg] = useState("");
+
+  /* ── app state ── */
+  const [tab, setTab] = useState("dashboard");
   const [transactions, setTransactions] = useState([]);
-  const [budgets,      setBudgets]      = useState({});
-  const [currency,     setCurrency]     = useState(CURRENCIES[0]);
+  const [budgets, setBudgets] = useState({});
+  const [inputText, setInputText] = useState("");
+  const [processing, setProcessing] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("");
+  const [liveTranscript, setLiveTranscript] = useState(""); // v5: live display
+  const [voiceReview, setVoiceReview] = useState(null); // v5: review before submit
+  const [currency, setCurrency] = useState("NGN");
+  const [filterType, setFilterType] = useState("all");
   const [reportPeriod, setReportPeriod] = useState("monthly");
-  const [aiInsight,    setAiInsight]    = useState("");
-  const [aiLoading,    setAiLoading]    = useState(false);
-  const [aiError,      setAiError]      = useState("");
-  const [notification, setNotification] = useState(null);
-  const [filterType,   setFilterType]   = useState("all");
-
-  // input state
-  const [inputText,   setInputText]   = useState("");
-  const [recording,   setRecording]   = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState(""); // "listening"|"processing"|""
-  const [processing,  setProcessing]  = useState(false);
-  const [parsedEntry, setParsedEntry] = useState(null);
-  const [showAddSheet,setShowAddSheet]= useState(false);
-  const [editTx,      setEditTx]      = useState(null);
-  const [deleteTx,    setDeleteTx]    = useState(null);
-
-  // sheet state
-  const [showCurrency, setShowCurrency] = useState(false);
+  const [editTx, setEditTx] = useState(null);
+  const [showBudgets, setShowBudgets] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showBudgets,  setShowBudgets]  = useState(false);
-  const [showPlans,    setShowPlans]    = useState(false);
-  const [budgetEdit,   setBudgetEdit]   = useState({});
-
+  const [aiInsight, setAiInsight] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [apiKey, setApiKey] = useState(()=>safeGet("moni_apikey",""));
+  const [msg, notify] = useNotify();
   const recRef = useRef(null);
-  const sym = currency.symbol;
+  const sym = CURRENCIES[currency]?.sym || "₦";
 
-  /* ── init ── */
+  /* ── proactive nudge state ── */
+  const [nudge, setNudge] = useState(null);
+
+  /* ── load user data ── */
   useEffect(()=>{
-    (async()=>{
-      const uRes = safeGet("mt:users");
-      let loadedUsers = [DEMO_USER];
-      if(uRes){ try{ const p=JSON.parse(uRes.value); loadedUsers=[DEMO_USER,...p.filter(u=>u.id!=="demo")]; }catch{} }
-      setUsers(loadedUsers);
-      safeSet("mt:users", JSON.stringify(loadedUsers));
-      const sRes = safeGet("mt:session");
-      if(sRes){
-        try{
-          const sess=JSON.parse(sRes.value);
-          const user=loadedUsers.find(u=>u.id===sess.userId);
-          if(user){
-            setCurrentUser(user); setLoggedIn(true);
-            const txRes  = safeGet(`mt:tx:${user.id}`);
-            const budRes = safeGet(`mt:budgets:${user.id}`);
-            const prfRes = safeGet(`mt:prefs:${user.id}`);
-            setTransactions(txRes ? JSON.parse(txRes.value) : (user.id==="demo" ? DEMO_TX : []));
-            setBudgets(budRes ? JSON.parse(budRes.value) : {});
-            if(prfRes){ const p=JSON.parse(prfRes.value); if(p.currency) setCurrency(CURRENCIES.find(c=>c.code===p.currency)||CURRENCIES[0]); }
-            setScreen(sess.onboarded?"app":"onboard");
-          } else setScreen("landing");
-        }catch{ setScreen("landing"); }
-      } else setScreen("landing");
-      setStorageReady(true);
-    })();
+    if(currentUser){
+      const uid = currentUser.id;
+      setTransactions(safeGet(`moni_tx_${uid}`,[]) );
+      setBudgets(safeGet(`moni_budgets_${uid}`,{}));
+      setCurrency(safeGet(`moni_currency_${uid}`,"NGN"));
+    }
+  },[currentUser]);
+
+  /* ── save transactions ── */
+  useEffect(()=>{ if(currentUser) safeSet(`moni_tx_${currentUser.id}`,transactions); },[transactions,currentUser]);
+  useEffect(()=>{ if(currentUser) safeSet(`moni_budgets_${currentUser.id}`,budgets); },[budgets,currentUser]);
+  useEffect(()=>{ if(currentUser) safeSet(`moni_currency_${currentUser.id}`,currency); },[currency,currentUser]);
+
+  /* ── splash ── */
+  useEffect(()=>{
+    setTimeout(()=>{
+      setScreen(currentUser?"app":"login");
+    },1800);
   },[]);
 
-  const saveTx  = (uid,arr)  => safeSet(`mt:tx:${uid}`, JSON.stringify(arr));
-  const saveBud = (uid,b)    => safeSet(`mt:budgets:${uid}`, JSON.stringify(b));
-  const savePrf = (uid,p)    => safeSet(`mt:prefs:${uid}`, JSON.stringify(p));
+  /* ── proactive nudges (v5) ── */
+  useEffect(()=>{
+    if(!currentUser||transactions.length===0) return;
+    const today = new Date().toISOString().split("T")[0];
+    const todayTx = transactions.filter(t=>t.date===today);
+    const lastKey = `moni_lastnudge_${currentUser.id}`;
+    const lastNudge = safeGet(lastKey,"");
+    if(lastNudge === today) return; // only nudge once per day
 
-  /* ── notify ── */
-  const notify=(msg,type="success")=>{ setNotification({msg,type}); setTimeout(()=>setNotification(null),3500); };
+    // Check budget alerts
+    const alerts = [];
+    for(const cat of CATEGORIES.expense){
+      const u = getBudgetUsage(cat);
+      if(u && u.pct >= 90 && u.pct < 100) alerts.push(`⚠️ You've used ${u.pct}% of your ${cat} budget`);
+      if(u && u.pct >= 100) alerts.push(`🚨 ${cat} budget exceeded!`);
+    }
+
+    // No log today nudge
+    if(todayTx.length===0){
+      setNudge({ type:"reminder", text:"👋 Hey " + (currentUser.name?.split(" ")[0]||"there") + "! You haven't logged any transactions today. Keep your records up to date!" });
+      safeSet(lastKey, today);
+      return;
+    }
+
+    // Budget alert nudge
+    if(alerts.length>0){
+      setNudge({ type:"alert", text: alerts[0] });
+      safeSet(lastKey, today);
+    }
+  },[currentUser,transactions,budgets]);
 
   /* ── derived ── */
-  const totalIncome  = transactions.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
-  const totalExpense = transactions.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
-  const balance      = totalIncome - totalExpense;
-  const saveRate     = totalIncome>0 ? Math.round((balance/totalIncome)*100) : 0;
-  const filtered     = filterType==="all" ? transactions : transactions.filter(t=>t.type===filterType);
-  const getCats = (type)=>{ const m={}; transactions.filter(t=>t.type===type).forEach(t=>{ m[t.category]=(m[t.category]||0)+t.amount; }); return Object.entries(m).map(([name,value])=>({name,value})).sort((a,b)=>b.value-a.value); };
-  const expenseCats = getCats("expense");
+  const now = new Date();
+  const filtered = transactions.filter(t=>{
+    if(filterType!=="all"&&t.type!==filterType) return false;
+    if(reportPeriod==="weekly"){ const d=new Date(t.date); const diff=(now-d)/864e5; return diff<=7; }
+    if(reportPeriod==="monthly"){ return t.date.startsWith(now.toISOString().slice(0,7)); }
+    if(reportPeriod==="yearly"){ return t.date.startsWith(String(now.getFullYear())); }
+    return true;
+  });
 
-  const getBarData = ()=>{ const days=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]; return days.map((d,i)=>({ day:d, income:transactions.filter(t=>t.type==="income"&&new Date(t.date).getDay()===((i+1)%7)).reduce((s,t)=>s+t.amount,0)||0, expense:transactions.filter(t=>t.type==="expense"&&new Date(t.date).getDay()===((i+1)%7)).reduce((s,t)=>s+t.amount,0)||0 })); };
-  const getTrendData = ()=>["Jan","Feb","Mar","Apr","May","Jun"].map((m,i)=>({ month:m, income:transactions.filter(t=>new Date(t.date).getMonth()===i&&t.type==="income").reduce((s,t)=>s+t.amount,0), expense:transactions.filter(t=>new Date(t.date).getMonth()===i&&t.type==="expense").reduce((s,t)=>s+t.amount,0), balance:transactions.filter(t=>new Date(t.date).getMonth()===i&&t.type==="income").reduce((s,t)=>s+t.amount,0)-transactions.filter(t=>new Date(t.date).getMonth()===i&&t.type==="expense").reduce((s,t)=>s+t.amount,0) }));
+  const periodTx = transactions.filter(t=>{
+    if(reportPeriod==="weekly"){const d=new Date(t.date);return (now-d)/864e5<=7;}
+    if(reportPeriod==="monthly") return t.date.startsWith(now.toISOString().slice(0,7));
+    if(reportPeriod==="yearly") return t.date.startsWith(String(now.getFullYear()));
+    return true;
+  });
 
-  const getBudgetUsage=(cat)=>{ if(!budgets[cat]) return null; const ms=new Date(); const start=new Date(ms.getFullYear(),ms.getMonth(),1).toISOString().split("T")[0]; const spent=transactions.filter(t=>t.type==="expense"&&t.category===cat&&t.date>=start).reduce((s,t)=>s+t.amount,0); return {spent,limit:budgets[cat],pct:Math.min((spent/budgets[cat])*100,100)}; };
+  const totalIncome = periodTx.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
+  const totalExpense = periodTx.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+  const balance = totalIncome - totalExpense;
+  const saveRate = totalIncome>0 ? Math.round((balance/totalIncome)*100) : 0;
 
-  /* ── auth ── */
-  const handleLogin=()=>{
-    const user=users.find(u=>u.email.toLowerCase()===authForm.email.toLowerCase()&&u.password===authForm.password);
-    if(!user){ setAuthError("Invalid email or password."); return; }
-    setCurrentUser(user); setLoggedIn(true); setAuthError("");
-    const txRes=safeGet(`mt:tx:${user.id}`); const budRes=safeGet(`mt:budgets:${user.id}`); const prfRes=safeGet(`mt:prefs:${user.id}`);
-    setTransactions(txRes?JSON.parse(txRes.value):(user.id==="demo"?DEMO_TX:[]));
-    setBudgets(budRes?JSON.parse(budRes.value):{});
-    if(prfRes){ const p=JSON.parse(prfRes.value); if(p.currency) setCurrency(CURRENCIES.find(c=>c.code===p.currency)||CURRENCIES[0]); }
-    safeSet("mt:session", JSON.stringify({userId:user.id,onboarded:true}));
-    setScreen("app");
-  };
-  const handleSignup=()=>{
-    if(!authForm.name||!authForm.email||!authForm.phone||!authForm.password){ setAuthError("All fields are required."); return; }
-    if(!/^[0-9+]{7,15}$/.test(authForm.phone.replace(/\s/g,""))){ setAuthError("Enter a valid phone number."); return; }
-    if(authForm.password.length<6){ setAuthError("Password must be at least 6 characters."); return; }
-    if(users.find(u=>u.email.toLowerCase()===authForm.email.toLowerCase())){ setAuthError("Email already registered."); return; }
-    const nu={id:`u_${Date.now()}`,name:authForm.name,email:authForm.email,phone:authForm.phone,password:authForm.password,plan:"free",joinDate:new Date().toISOString().split("T")[0]};
-    const updated=[...users,nu]; setUsers(updated); setCurrentUser(nu); setLoggedIn(true); setAuthError("");
-    safeSet("mt:users",JSON.stringify(updated));
-    safeSet(`mt:tx:${nu.id}`,JSON.stringify([])); // NEW users start EMPTY — no sample data
-    safeSet("mt:session",JSON.stringify({userId:nu.id,onboarded:false}));
-    setTransactions([]); setBudgets({});
-    setOnboardStep(0); setScreen("onboard");
-  };
-  const handleForgotPassword=()=>{
-    const user=users.find(u=>u.email.toLowerCase()===authForm.email.toLowerCase());
-    if(!user){ setAuthError("No account found with that email."); return; }
-    if(!authForm.newPassword||authForm.newPassword.length<6){ setAuthError("New password must be at least 6 characters."); return; }
-    const updated=users.map(u=>u.email.toLowerCase()===authForm.email.toLowerCase()?{...u,password:authForm.newPassword}:u);
-    setUsers(updated); safeSet("mt:users",JSON.stringify(updated));
-    setAuthError(""); notify("Password reset! You can now sign in. ✅");
-    setAuthMode("login"); setAuthForm({name:"",email:authForm.email,password:"",newPassword:""});
-  };
-  const handleLogout=()=>{ safeDel("mt:session"); setLoggedIn(false); setCurrentUser(null); setTransactions([]); setBudgets({}); setAiInsight(""); setAiError(""); setTab("dashboard"); setScreen("landing"); };
-  const finishOnboard=()=>{ safeSet("mt:session",JSON.stringify({userId:currentUser.id,onboarded:true})); setScreen("app"); };
+  const expenseCats = Object.entries(
+    periodTx.filter(t=>t.type==="expense").reduce((acc,t)=>{ acc[t.category]=(acc[t.category]||0)+t.amount; return acc; },{})
+  ).map(([name,value])=>({name,value})).sort((a,b)=>b.value-a.value);
 
-  /* ── voice ── */
-  const handleVoice=()=>{
-    if(!("webkitSpeechRecognition" in window||"SpeechRecognition" in window)){ notify("Voice not supported. Use Chrome browser.","error"); return; }
-    if(recording){ recRef.current?.stop(); setRecording(false); setVoiceStatus(""); return; }
-    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-    const rec=new SR(); rec.lang="en-NG"; rec.continuous=false; rec.interimResults=false;
-    rec.onstart=()=>{ setRecording(true); setVoiceStatus("listening"); };
-    rec.onresult=(e)=>{ const t=e.results[0][0].transcript; setInputText(t); setRecording(false); setVoiceStatus("Got it! Press 'Add with AI' to save."); setTimeout(()=>setVoiceStatus(""),4000); };
-    rec.onerror=()=>{ setRecording(false); setVoiceStatus(""); notify("Couldn't hear you. Try again.","error"); };
-    rec.onend=()=>{ setRecording(false); };
-    recRef.current=rec; rec.start();
-  };
+  function getBudgetUsage(cat){
+    if(!budgets[cat]) return null;
+    const spent = periodTx.filter(t=>t.type==="expense"&&t.category===cat).reduce((s,t)=>s+t.amount,0);
+    return { spent, limit:budgets[cat], pct:Math.round((spent/budgets[cat])*100) };
+  }
 
-  /* ── process ── */
-  const handleProcess=async()=>{
+  /* ── PROCESS TRANSACTION (v5 smart parse) ── */
+  const handleProcess = async () => {
     if(!inputText.trim()) return;
     setProcessing(true);
-    const local=localParse(inputText);
-    if(local.confidence>=0.9){ setParsedEntry(local); setShowAddSheet(true); setProcessing(false); return; }
-    const aiText=await callAI([{role:"user",content:`Parse this Nigerian finance entry. Return ONLY valid JSON, no extra text:\nEntry: "${inputText}"\nReturn: {"type":"income"|"expense","amount":number,"category":"one of [${ALL_CATS.join(", ")}]","note":"short description","date":"${new Date().toISOString().split("T")[0]}"}`}], 300);
-    if(aiText){
-      try{ const p=JSON.parse(aiText.replace(/```json|```/g,"").trim()); setParsedEntry({...p,confidence:0.95}); }
-      catch{ setParsedEntry(local); }
-    } else { setParsedEntry(local); }
-    setShowAddSheet(true); setProcessing(false);
+    try {
+      const local = localParse(inputText);
+      let result = local;
+
+      // Use AI if: no amount found, low confidence, or has model numbers
+      if(local.confidence < 0.75 || local.amount === 0){
+        try {
+          const aiText = await callAI([{
+            role:"user",
+            content:`Parse this Nigerian finance transaction and return ONLY valid JSON (no markdown):
+"${inputText}"
+
+Return: {"type":"income"|"expense","amount":number,"category":"<one of: ${[...CATEGORIES.income,...CATEGORIES.expense].join(", ")}>","note":"<short description>","date":"${new Date().toISOString().split("T")[0]}"}
+
+IMPORTANT:
+- Extract the PRICE/AMOUNT, not the model number. E.g. "iPhone 16 for 3 million" → amount: 3000000
+- 3m = 3,000,000. 50k = 50,000. "three million" = 3,000,000
+- Electronics (phones, laptops, gadgets) → category: "Electronics & Gadgets"`
+          }], apiKey);
+          const json = aiText.match(/\{[\s\S]*\}/)?.[0];
+          if(json){ const parsed=JSON.parse(json); result={...parsed, date:parsed.date||new Date().toISOString().split("T")[0]}; }
+        } catch(e){ /* use local result */ }
+      }
+
+      if(!result.amount || result.amount<=0){
+        notify("Couldn't figure out the amount. Try: 'Spent ₦5,000 on food'","error");
+        setProcessing(false);
+        return;
+      }
+
+      const tx = { id:Date.now(), type:result.type, amount:result.amount, category:result.category||"Other Expense", note:result.note||inputText, date:result.date||new Date().toISOString().split("T")[0] };
+      setTransactions(prev=>[tx,...prev]);
+      setInputText("");
+      setVoiceReview(null);
+      notify(`${tx.type==="income"?"Income":"Expense"} of ${sym}${tx.amount.toLocaleString()} added ✓`,"success");
+    } catch(e){
+      notify("Something went wrong. Try again.","error");
+    }
+    setProcessing(false);
   };
 
-  /* ── crud ── */
-  const confirmAdd=()=>{
-    if(!parsedEntry||parsedEntry.amount<=0){ notify("Amount must be greater than 0","error"); return; }
-    const tx={...parsedEntry,id:`tx_${Date.now()}`}; delete tx.confidence;
-    const updated=[tx,...transactions]; setTransactions(updated); saveTx(currentUser.id,updated);
-    setInputText(""); setParsedEntry(null); setShowAddSheet(false); notify("Transaction saved ✅");
-    checkBudgetAlert(tx,updated);
-  };
-  const confirmEdit=()=>{ const u=transactions.map(t=>t.id===editTx.id?editTx:t); setTransactions(u); saveTx(currentUser.id,u); setEditTx(null); notify("Updated ✅"); };
-  const confirmDelete=()=>{ const u=transactions.filter(t=>t.id!==deleteTx.id); setTransactions(u); saveTx(currentUser.id,u); setDeleteTx(null); notify("Deleted"); };
-  const checkBudgetAlert=(tx,all)=>{ if(tx.type!=="expense") return; const lim=budgets[tx.category]; if(!lim) return; const ms=new Date(); const start=new Date(ms.getFullYear(),ms.getMonth(),1).toISOString().split("T")[0]; const spent=all.filter(t=>t.type==="expense"&&t.category===tx.category&&t.date>=start).reduce((s,t)=>s+t.amount,0); const pct=(spent/lim)*100; if(pct>=100) notify(`🚨 ${tx.category} budget exceeded!`,"error"); else if(pct>=80) notify(`⚠️ ${tx.category} at ${Math.round(pct)}% of budget`,"warn"); };
+  /* ── VOICE (v5: live transcript + review step) ── */
+  const handleVoice = () => {
+    if(!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)){
+      notify("Voice not supported. Use Chrome browser.","error"); return;
+    }
+    if(recording){ recRef.current?.stop(); setRecording(false); setVoiceStatus(""); setLiveTranscript(""); return; }
 
-  /* ── AI insights ── */
-  const fetchInsights=async()=>{
-    if(transactions.length===0){ notify("Add some transactions first to get insights!","error"); return; }
-    setAiLoading(true); setAiError(""); setTab("insights");
-    const topCats=expenseCats.slice(0,3).map(c=>`${c.name}: ${sym}${c.value.toLocaleString()}`);
-    const text=await callAI([{role:"user",content:`You are Moni, a friendly AI finance advisor for Nigerian users. Be warm, specific, and practical.\n\nFinancial summary:\n- Income: ${sym}${totalIncome.toLocaleString()} | Expenses: ${sym}${totalExpense.toLocaleString()} | Balance: ${sym}${balance.toLocaleString()}\n- Save rate: ${saveRate}% | Transactions: ${transactions.length} | Currency: ${currency.code}\n- Top expenses: ${topCats.join(", ") || "None yet"}\n\nGive exactly:\n1. Three personalised insights (with specific numbers)\n2. Three actionable money tips\n\nUse emojis. Reference Nigerian context (cost of living, local savings, POS, etc). Keep it encouraging and under 250 words.`}], 600);
-    if(text){ setAiInsight(text); setAiError(""); }
-    else { setAiError("Couldn't connect to AI. Check your internet and try again."); }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.lang = "en-NG";
+    rec.continuous = false;
+    rec.interimResults = true; // v5: live transcript
+
+    rec.onstart = () => { setRecording(true); setVoiceStatus("Listening... speak now"); setLiveTranscript(""); setVoiceReview(null); };
+
+    rec.onresult = (e) => {
+      let interim = "";
+      let final = "";
+      for(let i=e.resultIndex; i<e.results.length; i++){
+        const t = e.results[i][0].transcript;
+        if(e.results[i].isFinal) final += t;
+        else interim += t;
+      }
+      // Show live interim transcript
+      if(interim) setLiveTranscript(interim);
+      if(final){
+        setLiveTranscript(final);
+        setInputText(final);
+        // v5: show review step so user can confirm or edit before adding
+        setVoiceReview(final);
+        setVoiceStatus("Heard you! Review below 👇");
+      }
+    };
+
+    rec.onerror = (e) => {
+      setRecording(false); setVoiceStatus(""); setLiveTranscript("");
+      if(e.error==="no-speech") notify("Nothing heard. Try again.","error");
+      else if(e.error==="not-allowed") notify("Microphone blocked. Allow mic access in browser settings.","error");
+      else notify("Couldn't hear clearly. Try again in a quiet spot.","error");
+    };
+
+    rec.onend = () => { setRecording(false); };
+    recRef.current = rec;
+    rec.start();
+  };
+
+  /* ── INSIGHTS ── */
+  const fetchInsights = async () => {
+    if(transactions.length===0){ notify("Add some transactions first!","error"); return; }
+    setAiLoading(true); setAiError(""); setAiInsight("");
+    try {
+      const recent = transactions.slice(0,20);
+      const totalInc = recent.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
+      const totalExp = recent.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+      const topCats = Object.entries(recent.filter(t=>t.type==="expense").reduce((a,t)=>({...a,[t.category]:(a[t.category]||0)+t.amount}),{})).sort((a,b)=>b[1]-a[1]).slice(0,3);
+      const text = await callAI([{
+        role:"user",
+        content:`You are Moni AI, a friendly financial advisor for Nigerians. Give personalised insights in 3-4 short paragraphs. Be encouraging, specific, and practical.
+
+User's data:
+- Total income: ${sym}${totalInc.toLocaleString()}
+- Total expenses: ${sym}${totalExp.toLocaleString()}
+- Balance: ${sym}${(totalInc-totalExp).toLocaleString()}
+- Top spending: ${topCats.map(([k,v])=>`${k} (${sym}${v.toLocaleString()})`).join(", ")}
+- Recent transactions: ${recent.slice(0,5).map(t=>`${t.type}: ${sym}${t.amount.toLocaleString()} on ${t.category}`).join("; ")}
+
+Give: 1) spending pattern observation, 2) one specific savings tip for Nigeria, 3) one action to take this week. Keep it conversational and under 150 words.`
+      }], apiKey);
+      setAiInsight(text);
+    } catch(e){
+      setAiError(e.message.includes("API key")||e.message.includes("No API") ? "Add your Anthropic API key in Settings to use AI insights." : "Couldn't load insights. Check your connection and try again.");
+    }
     setAiLoading(false);
   };
 
-  /* ── currency ── */
-  const changeCurrency=(c)=>{ setCurrency(c); setShowCurrency(false); savePrf(currentUser.id,{currency:c.code}); notify(`Currency changed to ${c.name} ${c.flag}`); };
+  /* ── CHART DATA ── */
+  const getBarData = () => {
+    const days=7; const data=[];
+    for(let i=days-1;i>=0;i--){
+      const d=new Date(); d.setDate(d.getDate()-i);
+      const ds=d.toISOString().split("T")[0];
+      const day=d.toLocaleDateString("en",{weekday:"short"});
+      const txs=transactions.filter(t=>t.date===ds);
+      data.push({day,income:txs.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0),expense:txs.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0)});
+    }
+    return data;
+  };
+  const getTrendData = () => {
+    const months=6; const data=[];
+    for(let i=months-1;i>=0;i--){
+      const d=new Date(); d.setMonth(d.getMonth()-i);
+      const key=d.toISOString().slice(0,7);
+      const month=d.toLocaleDateString("en",{month:"short"});
+      const txs=transactions.filter(t=>t.date.startsWith(key));
+      const inc=txs.filter(t=>t.type==="income").reduce((s,t)=>s+t.amount,0);
+      const exp=txs.filter(t=>t.type==="expense").reduce((s,t)=>s+t.amount,0);
+      data.push({month,balance:inc-exp});
+    }
+    return data;
+  };
 
-  /* ── save budgets ── */
-  const saveBudgets=()=>{ const merged={...budgets}; Object.entries(budgetEdit).forEach(([k,v])=>{ if(v&&parseFloat(v)>0) merged[k]=parseFloat(v); else if(v==="") delete merged[k]; }); setBudgets(merged); saveBud(currentUser.id,merged); setBudgetEdit({}); setShowBudgets(false); notify("Budgets saved 💰"); };
+  /* ── PDF EXPORT ── */
+  const exportPDF = () => {
+    const win = window.open("","_blank");
+    if(!win) return;
+    const rows = periodTx.map(t=>`<tr><td>${t.date}</td><td>${t.type}</td><td>${t.category}</td><td style="color:${t.type==="income"?"green":"red"}">${sym}${t.amount.toLocaleString()}</td><td>${t.note}</td></tr>`).join("");
+    win.document.write(`<html><head><title>Moni Tracker Report</title><style>body{font-family:Arial,sans-serif;padding:20px;}table{width:100%;border-collapse:collapse;}th,td{border:1px solid #ddd;padding:8px;text-align:left;}th{background:#f2f2f2;}h1{color:#00C896;}</style></head><body><h1>Moni Tracker — ${reportPeriod} Report</h1><p>Name: ${currentUser?.name} | Period: ${reportPeriod} | Generated: ${new Date().toLocaleDateString()}</p><p>Income: ${sym}${totalIncome.toLocaleString()} | Expenses: ${sym}${totalExpense.toLocaleString()} | Balance: ${sym}${balance.toLocaleString()}</p><table><tr><th>Date</th><th>Type</th><th>Category</th><th>Amount</th><th>Note</th></tr>${rows}</table></body></html>`);
+    win.document.close();
+    setTimeout(()=>win.print(),400);
+  };
 
-  /* ═══════════════════════════════════════════════════════
-     LOADING
-  ═══════════════════════════════════════════════════════ */
-  if(screen==="loading") return (
-    <div style={{minHeight:"100vh",background:"#0A0E1A",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"DM Sans,sans-serif"}}>
-      <style>{CSS}</style>
-      <div style={{textAlign:"center"}}>
-        <div style={{fontFamily:"Syne,sans-serif",fontSize:32,fontWeight:800,color:"#E8EAF0"}}><span style={{color:"#00C896"}}>Moni</span> Tracker</div>
-        <div style={{color:"rgba(232,234,240,.4)",fontSize:14,marginTop:8}} className="pulse">Loading...</div>
+  /* ── EDIT TX ── */
+  const saveEdit = () => {
+    setTransactions(prev=>prev.map(t=>t.id===editTx.id?editTx:t));
+    setEditTx(null);
+    notify("Transaction updated ✓");
+  };
+  const deleteTx = (id) => {
+    setTransactions(prev=>prev.filter(t=>t.id!==id));
+    notify("Transaction deleted");
+  };
+
+  /* ── AUTH ── */
+  const doRegister = () => {
+    setAuthError("");
+    if(!authForm.name||!authForm.email||!authForm.password){ setAuthError("Fill all fields"); return; }
+    if(authForm.password!==authForm.confirm){ setAuthError("Passwords don't match"); return; }
+    if(authForm.password.length<6){ setAuthError("Password must be at least 6 characters"); return; }
+    if(accounts.find(a=>a.email===authForm.email)){ setAuthError("Email already registered"); return; }
+    const user={id:Date.now(),name:authForm.name,email:authForm.email,phone:authForm.phone,password:authForm.password};
+    const updated=[...accounts,user];
+    setAccounts(updated); safeSet("moni_accounts",updated);
+    setCurrentUser(user); safeSet("moni_user",user);
+    setScreen("app");
+  };
+  const doLogin = () => {
+    setAuthError("");
+    const user = accounts.find(a=>a.email===authForm.email&&a.password===authForm.password);
+    if(!user){ setAuthError("Wrong email or password"); return; }
+    setCurrentUser(user); safeSet("moni_user",user);
+    setScreen("app");
+  };
+  const doLogout = () => {
+    safeDel("moni_user"); setCurrentUser(null); setTransactions([]); setScreen("login");
+  };
+  const doReset = () => {
+    setResetMsg("");
+    const user = accounts.find(a=>a.email===resetEmail);
+    if(!user){ setResetMsg("No account found with that email."); return; }
+    setResetMsg(`✅ Found your account! Your registered name is: ${user.name}. Please contact support to reset your password, or use the override below.`);
+  };
+
+  /* ── SCREENS ── */
+
+  // SPLASH
+  if(screen==="splash") return (
+    <div style={{background:"linear-gradient(160deg,#0A0E1A 0%,#111827 100%)",minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{fontFamily:"Syne,sans-serif",fontSize:36,fontWeight:800,color:"#00C896",marginBottom:8}}>Moni</div>
+      <div style={{fontSize:13,color:"rgba(232,234,240,.4)",letterSpacing:2}}>TRACKER</div>
+      <div style={{marginTop:30,width:40,height:3,background:"rgba(0,200,150,.3)",borderRadius:2,position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",left:0,top:0,height:"100%",background:"#00C896",borderRadius:2,animation:"load 1.5s ease forwards"}}/>
+      </div>
+      <style>{`@keyframes load{from{width:0}to{width:100%}}`}</style>
+    </div>
+  );
+
+  // LOGIN
+  if(screen==="login") return (
+    <div className="app" style={{padding:"30px 24px"}}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{marginBottom:36,marginTop:20}}>
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:30,fontWeight:800,color:"#00C896",marginBottom:4}}>Welcome back 👋</div>
+        <div style={{fontSize:14,color:"rgba(232,234,240,.4)"}}>Sign in to your Moni Tracker account</div>
+      </div>
+      {authError&&<div style={{background:"rgba(255,107,107,.1)",border:"1px solid rgba(255,107,107,.3)",borderRadius:12,padding:"11px 14px",marginBottom:14,fontSize:13,color:"#FF6B6B"}}>{authError}</div>}
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:12,color:"rgba(232,234,240,.5)",marginBottom:6,fontWeight:600}}>EMAIL</div>
+        <input className="field" type="email" placeholder="you@example.com" value={authForm.email} onChange={e=>setAuthForm(f=>({...f,email:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
+      </div>
+      <div style={{marginBottom:20}}>
+        <div style={{fontSize:12,color:"rgba(232,234,240,.5)",marginBottom:6,fontWeight:600}}>PASSWORD</div>
+        <input className="field" type="password" placeholder="••••••••" value={authForm.password} onChange={e=>setAuthForm(f=>({...f,password:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
+      </div>
+      <button className="btn-green" onClick={doLogin}>Sign In</button>
+      <button onClick={()=>{setScreen("forgot");setAuthError("");}} style={{background:"transparent",border:"none",color:"rgba(0,200,150,.7)",fontFamily:"DM Sans",fontSize:13,cursor:"pointer",width:"100%",marginTop:12}}>Forgot password?</button>
+      <div style={{textAlign:"center",marginTop:24,fontSize:14,color:"rgba(232,234,240,.4)"}}>
+        Don't have an account? <span onClick={()=>{setScreen("register");setAuthError("");}} style={{color:"#00C896",cursor:"pointer",fontWeight:700}}>Sign Up</span>
       </div>
     </div>
   );
 
-  /* ═══════════════════════════════════════════════════════
-     LANDING PAGE
-  ═══════════════════════════════════════════════════════ */
-  if(screen==="landing") return (
-    <div style={{minHeight:"100vh",background:"#0A0E1A",fontFamily:"'DM Sans',sans-serif",color:"#E8EAF0",overflowX:"hidden"}}>
-      <style>{CSS}</style>
-      <div style={{position:"fixed",top:-300,left:-200,width:700,height:700,background:"radial-gradient(circle,rgba(0,200,150,.1) 0%,transparent 70%)",pointerEvents:"none"}}/>
-      <div style={{position:"fixed",bottom:-200,right:-200,width:600,height:600,background:"radial-gradient(circle,rgba(108,99,255,.08) 0%,transparent 70%)",pointerEvents:"none"}}/>
-      {/* NAV */}
-      <div style={{padding:"18px 24px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid rgba(255,255,255,.06)",position:"sticky",top:0,background:"rgba(10,14,26,.9)",backdropFilter:"blur(16px)",zIndex:10}}>
-        <div style={{fontFamily:"Syne,sans-serif",fontSize:22,fontWeight:800}}><span style={{color:"#00C896"}}>Moni</span> Tracker</div>
-        <button className="btn-ghost" onClick={()=>{setScreen("auth");setAuthMode("login");}} style={{padding:"9px 18px",fontSize:13}}>Sign In</button>
+  // FORGOT PASSWORD
+  if(screen==="forgot") return (
+    <div className="app" style={{padding:"30px 24px"}}>
+      <style>{GLOBAL_CSS}</style>
+      <button onClick={()=>setScreen("login")} style={{background:"transparent",border:"none",color:"rgba(232,234,240,.5)",fontFamily:"DM Sans",fontSize:14,cursor:"pointer",marginBottom:24,display:"flex",alignItems:"center",gap:6}}>← Back to Login</button>
+      <div style={{marginBottom:32}}>
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:26,fontWeight:800,marginBottom:6}}>Forgot Password?</div>
+        <div style={{fontSize:13,color:"rgba(232,234,240,.4)"}}>Enter your email to find your account</div>
       </div>
-      {/* HERO */}
-      <div style={{padding:"56px 24px 40px",maxWidth:480,margin:"0 auto",textAlign:"center"}} className="fade">
-        <div style={{display:"inline-flex",alignItems:"center",gap:8,background:"rgba(0,200,150,.1)",border:"1px solid rgba(0,200,150,.2)",borderRadius:20,padding:"6px 16px",marginBottom:22,fontSize:13,color:"#00C896",fontWeight:700}}>🇳🇬 Built for Africa · AI-Powered</div>
-        <h1 style={{fontFamily:"Syne,sans-serif",fontSize:38,fontWeight:800,lineHeight:1.15,marginBottom:18,letterSpacing:"-1px"}}>Track expenses with<br/><span style={{color:"#00C896"}}>simple English.</span></h1>
-        <p style={{fontSize:15,color:"rgba(232,234,240,.6)",lineHeight:1.75,marginBottom:12}}>Say <span style={{color:"#00C896",fontWeight:600}}>"Spent ₦5,000 on food today"</span> and Moni does the rest. Instantly categorised by AI. Built for Nigerians and Africans.</p>
-        <p style={{fontSize:13,color:"rgba(232,234,240,.4)",marginBottom:32}}>No accounting knowledge needed. No spreadsheets. Just talk.</p>
-        <button className="btn-green" onClick={()=>{setScreen("auth");setAuthMode("signup");}} style={{fontSize:16,padding:"17px",borderRadius:16,marginBottom:10}}>Start for Free →</button>
-        <div style={{fontSize:12,color:"rgba(232,234,240,.3)"}}>No credit card · Free forever plan · 2 min setup</div>
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:12,color:"rgba(232,234,240,.5)",marginBottom:6,fontWeight:600}}>YOUR EMAIL</div>
+        <input className="field" type="email" placeholder="you@example.com" value={resetEmail} onChange={e=>setResetEmail(e.target.value)}/>
       </div>
-      {/* HOW IT WORKS */}
-      <div style={{padding:"0 24px 40px",maxWidth:480,margin:"0 auto"}}>
-        <div style={{textAlign:"center",marginBottom:24}}>
-          <div style={{fontSize:11,fontWeight:700,color:"rgba(0,200,150,.8)",letterSpacing:"1px",marginBottom:8}}>HOW IT WORKS</div>
-          <div style={{fontFamily:"Syne,sans-serif",fontSize:22,fontWeight:800}}>Three steps. That's it.</div>
-        </div>
-        {[
-          {n:"1",icon:"🗣️",title:"Speak or type anything",desc:'Say "Spent ₦3,500 on transport" or type it naturally. No forms to fill.'},
-          {n:"2",icon:"🤖",title:"AI categorises instantly",desc:"Our AI reads your entry, finds the amount, category and type automatically."},
-          {n:"3",icon:"📊",title:"Track & grow",desc:"See beautiful reports, get AI advice, and understand your money like never before."},
-        ].map(s=>(
-          <div key={s.n} className="card" style={{marginBottom:12,display:"flex",gap:16,alignItems:"flex-start"}}>
-            <div style={{width:44,height:44,borderRadius:14,background:"rgba(0,200,150,.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>{s.icon}</div>
-            <div><div style={{fontWeight:700,fontSize:15,marginBottom:4}}>{s.title}</div><div style={{fontSize:13,color:"rgba(232,234,240,.5)",lineHeight:1.6}}>{s.desc}</div></div>
-          </div>
-        ))}
-      </div>
-      {/* FEATURES */}
-      <div style={{padding:"0 24px 40px",maxWidth:480,margin:"0 auto"}}>
-        <div style={{textAlign:"center",marginBottom:20}}>
-          <div style={{fontFamily:"Syne,sans-serif",fontSize:22,fontWeight:800}}>Everything you need</div>
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          {[{icon:"🎙️",t:"Voice Logging",d:"Speak your expenses hands-free"},{icon:"🤖",t:"AI Categorisation",d:"Automatic & accurate"},{icon:"📊",t:"Smart Reports",d:"Weekly & monthly breakdowns"},{icon:"💡",t:"AI Insights",d:"Personalised money advice"},{icon:"🌍",t:"Multi-Currency",d:"NGN, USD, GHS & more"},{icon:"📄",t:"PDF Export",d:"Beautiful financial reports"}].map(f=>(
-            <div key={f.t} className="card" style={{padding:"16px 14px"}}>
-              <div style={{fontSize:24,marginBottom:8}}>{f.icon}</div>
-              <div style={{fontSize:13,fontWeight:700,marginBottom:3}}>{f.t}</div>
-              <div style={{fontSize:11,color:"rgba(232,234,240,.4)"}}>{f.d}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-      {/* TRUST */}
-      <div style={{padding:"0 24px 40px",maxWidth:480,margin:"0 auto"}}>
-        <div className="card" style={{background:"rgba(0,200,150,.05)",borderColor:"rgba(0,200,150,.2)"}}>
-          <div style={{fontFamily:"Syne,sans-serif",fontSize:18,fontWeight:800,marginBottom:16,textAlign:"center"}}>Your data is safe 🔒</div>
-          {[{icon:"🔐",t:"Secure storage",d:"Your data is stored securely on your device and encrypted"},
-            {icon:"🙈",t:"Privacy first",d:"We never sell your financial data to third parties"},
-            {icon:"🇳🇬",t:"Built for Africa",d:"Designed specifically for Nigerian and African users"}].map(i=>(
-            <div key={i.t} style={{display:"flex",gap:12,alignItems:"flex-start",marginBottom:14}}>
-              <span style={{fontSize:22}}>{i.icon}</span>
-              <div><div style={{fontWeight:600,fontSize:14}}>{i.t}</div><div style={{fontSize:12,color:"rgba(232,234,240,.4)",marginTop:2}}>{i.d}</div></div>
-            </div>
-          ))}
-        </div>
-      </div>
-      {/* PRICING */}
-      <div style={{padding:"0 24px 60px",maxWidth:480,margin:"0 auto"}}>
-        <div style={{textAlign:"center",marginBottom:20}}>
-          <div style={{fontFamily:"Syne,sans-serif",fontSize:22,fontWeight:800}}>Simple pricing</div>
-          <div style={{fontSize:13,color:"rgba(232,234,240,.4)",marginTop:6}}>Start free. Upgrade when you need more.</div>
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:24}}>
-          {Object.values(PLANS).map((p,i)=>(
-            <div key={p.name} style={{padding:18,borderRadius:16,border:`2px solid ${p.color}40`,background:`${p.color}08`}}>
-              <div style={{fontFamily:"Syne,sans-serif",fontSize:18,fontWeight:800,color:p.color}}>{p.name}</div>
-              <div style={{fontSize:17,fontWeight:700,margin:"6px 0 12px"}}>{p.price}</div>
-              {p.features.slice(0,4).map(f=><div key={f} style={{fontSize:11,color:"rgba(232,234,240,.5)",marginBottom:4}}>✓ {f}</div>)}
-            </div>
-          ))}
-        </div>
-        <button className="btn-green" onClick={()=>{setScreen("auth");setAuthMode("signup");}} style={{fontSize:16,padding:"16px",borderRadius:16}}>Create Free Account →</button>
-        <div style={{textAlign:"center",marginTop:12,fontSize:12,color:"rgba(232,234,240,.2)"}}>monitracker.com</div>
+      <button className="btn-green" onClick={doReset}>Find My Account</button>
+      {resetMsg&&<div style={{background:"rgba(0,200,150,.08)",border:"1px solid rgba(0,200,150,.2)",borderRadius:12,padding:"13px 15px",marginTop:14,fontSize:13,color:"rgba(232,234,240,.8)",lineHeight:1.7}}>{resetMsg}</div>}
+      <div style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:16,marginTop:20}}>
+        <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>💡 Quick Tip</div>
+        <div style={{fontSize:12,color:"rgba(232,234,240,.5)",lineHeight:1.7}}>Since Moni Tracker saves data locally on your device, your password is stored here. If you remember roughly what you used, try: your phone number, your name, or "password123".</div>
       </div>
     </div>
   );
 
-  /* ═══════════════════════════════════════════════════════
-     AUTH
-  ═══════════════════════════════════════════════════════ */
-  if(screen==="auth") return (
-    <div style={{minHeight:"100vh",background:"#0A0E1A",display:"flex",alignItems:"center",justifyContent:"center",padding:24,fontFamily:"'DM Sans',sans-serif"}}>
-      <style>{CSS}</style>
-      <div style={{position:"fixed",top:-200,left:-200,width:600,height:600,background:"radial-gradient(circle,rgba(0,200,150,.1) 0%,transparent 70%)",pointerEvents:"none"}}/>
-      <div style={{width:"100%",maxWidth:420}} className="fade">
-        <button onClick={()=>setScreen("landing")} style={{background:"transparent",border:"none",color:"rgba(232,234,240,.4)",fontSize:13,cursor:"pointer",marginBottom:20,display:"flex",alignItems:"center",gap:6}}>← Back</button>
-        <div style={{textAlign:"center",marginBottom:28}}>
-          <div style={{fontFamily:"Syne,sans-serif",fontSize:30,fontWeight:800}}><span style={{color:"#00C896"}}>Moni</span> Tracker</div>
-          <div style={{color:"rgba(232,234,240,.4)",fontSize:13,marginTop:4}}>Your financial companion</div>
+  // REGISTER
+  if(screen==="register") return (
+    <div className="app" style={{padding:"30px 24px"}}>
+      <style>{GLOBAL_CSS}</style>
+      <div style={{marginBottom:32,marginTop:20}}>
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:28,fontWeight:800,color:"#00C896",marginBottom:4}}>Create Account ✨</div>
+        <div style={{fontSize:14,color:"rgba(232,234,240,.4)"}}>Start tracking your money smarter</div>
+      </div>
+      {authError&&<div style={{background:"rgba(255,107,107,.1)",border:"1px solid rgba(255,107,107,.3)",borderRadius:12,padding:"11px 14px",marginBottom:14,fontSize:13,color:"#FF6B6B"}}>{authError}</div>}
+      {[{k:"name",l:"FULL NAME",p:"e.g. Thomas James",t:"text"},{k:"email",l:"EMAIL",p:"you@gmail.com",t:"email"},{k:"phone",l:"PHONE (optional)",p:"+234 800 000 0000",t:"tel"},{k:"password",l:"PASSWORD",p:"Min. 6 characters",t:"password"},{k:"confirm",l:"CONFIRM PASSWORD",p:"Re-enter password",t:"password"}].map(f=>(
+        <div key={f.k} style={{marginBottom:12}}>
+          <div style={{fontSize:12,color:"rgba(232,234,240,.5)",marginBottom:6,fontWeight:600}}>{f.l}</div>
+          <input className="field" type={f.t} placeholder={f.p} value={authForm[f.k]} onChange={e=>setAuthForm(prev=>({...prev,[f.k]:e.target.value}))}/>
         </div>
-        <div className="card" style={{padding:28}}>
-          {/* Tab switcher — only for login/signup */}
-          {authMode!=="forgot" && (
-            <div style={{display:"flex",gap:6,marginBottom:22,background:"rgba(255,255,255,.04)",borderRadius:12,padding:4}}>
-              {["login","signup"].map(m=>(
-                <button key={m} onClick={()=>{setAuthMode(m);setAuthError("");}} style={{flex:1,padding:"10px",borderRadius:10,border:"none",background:authMode===m?"#00C896":"transparent",color:authMode===m?"#0A0E1A":"rgba(232,234,240,.5)",fontFamily:"DM Sans,sans-serif",fontWeight:700,fontSize:14,cursor:"pointer",transition:"all .2s"}}>
-                  {m==="login"?"Sign In":"Create Account"}
-                </button>
-              ))}
-            </div>
-          )}
-          {/* Forgot password header */}
-          {authMode==="forgot" && (
-            <div style={{marginBottom:20}}>
-              <button onClick={()=>{setAuthMode("login");setAuthError("");}} style={{background:"transparent",border:"none",color:"rgba(232,234,240,.4)",fontSize:13,cursor:"pointer",marginBottom:12}}>← Back to Sign In</button>
-              <div style={{fontFamily:"Syne,sans-serif",fontSize:20,fontWeight:800}}>Reset Password</div>
-              <div style={{fontSize:13,color:"rgba(232,234,240,.4)",marginTop:4}}>Enter your email and choose a new password</div>
-            </div>
-          )}
-          <div style={{display:"flex",flexDirection:"column",gap:12}}>
-            {authMode==="signup" && <input className="field" placeholder="Full Name" value={authForm.name} onChange={e=>setAuthForm({...authForm,name:e.target.value})}/>}
-            <input className="field" type="email" placeholder="Email Address" value={authForm.email} onChange={e=>setAuthForm({...authForm,email:e.target.value})}/>
-            {authMode==="signup" && <input className="field" type="tel" placeholder="Phone Number (e.g. 08012345678)" value={authForm.phone} onChange={e=>setAuthForm({...authForm,phone:e.target.value})}/>}
-            {authMode!=="forgot" && <input className="field" type="password" placeholder={authMode==="login"?"Password":"Password (min 6 characters)"} value={authForm.password} onChange={e=>setAuthForm({...authForm,password:e.target.value})} onKeyDown={e=>{ if(e.key==="Enter") authMode==="login"?handleLogin():handleSignup(); }}/>}
-            {authMode==="forgot" && <input className="field" type="password" placeholder="New Password (min 6 characters)" value={authForm.newPassword} onChange={e=>setAuthForm({...authForm,newPassword:e.target.value})}/>}
-            {authError && <div style={{background:"rgba(255,107,107,.1)",border:"1px solid rgba(255,107,107,.3)",borderRadius:10,padding:"10px 14px",color:"#FF6B6B",fontSize:13}}>{authError}</div>}
-            <button className="btn-green" style={{marginTop:4}} onClick={authMode==="login"?handleLogin:authMode==="signup"?handleSignup:handleForgotPassword}>
-              {authMode==="login"?"Sign In →":authMode==="signup"?"Create Account →":"Reset Password →"}
-            </button>
-            {authMode==="login" && <button onClick={()=>{setAuthMode("forgot");setAuthError("");}} style={{background:"transparent",border:"none",color:"rgba(0,200,150,.7)",fontSize:13,cursor:"pointer",textAlign:"center",padding:"4px"}}>Forgot Password?</button>}
-          </div>
-          {authMode==="login" && (
-            <div style={{marginTop:18,padding:14,background:"rgba(0,200,150,.07)",borderRadius:12,border:"1px solid rgba(0,200,150,.15)"}}>
-              <div style={{fontSize:11,fontWeight:700,color:"rgba(232,234,240,.4)",letterSpacing:".5px",marginBottom:6}}>DEMO ACCOUNT</div>
-              <div style={{fontSize:13,color:"rgba(232,234,240,.6)"}}>📧 demo@moni.app &nbsp;·&nbsp; 🔑 demo123</div>
-            </div>
-          )}
-        </div>
+      ))}
+      <div style={{marginTop:4}}>
+        <button className="btn-green" onClick={doRegister}>Create My Account</button>
+      </div>
+      <div style={{textAlign:"center",marginTop:20,fontSize:14,color:"rgba(232,234,240,.4)"}}>
+        Already have an account? <span onClick={()=>{setScreen("login");setAuthError("");}} style={{color:"#00C896",cursor:"pointer",fontWeight:700}}>Sign In</span>
       </div>
     </div>
   );
 
-  /* ═══════════════════════════════════════════════════════
-     ONBOARDING
-  ═══════════════════════════════════════════════════════ */
-  if(screen==="onboard"){
-    const step=ONBOARDING[onboardStep];
-    return (
-      <div style={{minHeight:"100vh",background:"#0A0E1A",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,fontFamily:"'DM Sans',sans-serif",color:"#E8EAF0"}}>
-        <style>{CSS}</style>
-        <div style={{maxWidth:340,width:"100%",textAlign:"center"}} className="fade" key={onboardStep}>
-          <div style={{fontSize:76,marginBottom:24}}>{step.icon}</div>
-          <h2 style={{fontFamily:"Syne,sans-serif",fontSize:25,fontWeight:800,marginBottom:14,lineHeight:1.2}}>{step.title}</h2>
-          <p style={{fontSize:15,color:"rgba(232,234,240,.6)",lineHeight:1.75,marginBottom:36}}>{step.desc}</p>
-          <div style={{display:"flex",justifyContent:"center",gap:8,marginBottom:32}}>
-            {ONBOARDING.map((_,i)=><div key={i} style={{width:i===onboardStep?24:8,height:8,borderRadius:4,background:i===onboardStep?"#00C896":"rgba(255,255,255,.12)",transition:"all .3s"}}/>)}
-          </div>
-          <button className="btn-green" style={{fontSize:16,padding:"15px"}} onClick={()=>onboardStep<ONBOARDING.length-1?setOnboardStep(s=>s+1):finishOnboard()}>{step.btn}</button>
-          {onboardStep>0&&<button onClick={()=>setOnboardStep(s=>s-1)} style={{background:"transparent",border:"none",color:"rgba(232,234,240,.25)",fontSize:13,cursor:"pointer",marginTop:14,display:"block",width:"100%"}}>← Back</button>}
-        </div>
-      </div>
-    );
-  }
-
-  /* ═══════════════════════════════════════════════════════
-     MAIN APP
-  ═══════════════════════════════════════════════════════ */
-  const TxCard=({t,actions=true})=>(
-    <div className="card" style={{marginBottom:10,padding:"16px 18px"}}>
-      <div style={{display:"flex",alignItems:"center",gap:12}}>
-        <div style={{width:44,height:44,borderRadius:13,background:t.type==="income"?"rgba(0,200,150,.15)":"rgba(255,107,107,.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:19,flexShrink:0}}>
-          {t.type==="income"?"💰":"💸"}
-        </div>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-            <div style={{fontSize:14,fontWeight:600}}>{t.category}</div>
-            <div style={{fontSize:15,fontWeight:700,color:t.type==="income"?"#00C896":"#FF6B6B",flexShrink:0}}>{t.type==="income"?"+":"-"}{sym}{Number(t.amount).toLocaleString()}</div>
-          </div>
-          <div style={{fontSize:12,color:"rgba(232,234,240,.4)",marginTop:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.note}</div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6}}>
-            <div style={{fontSize:11,color:"rgba(232,234,240,.25)"}}>{t.date}</div>
-            <div style={{display:"flex",gap:6,alignItems:"center"}}>
-              <span className={t.type==="income"?"tag-i":"tag-e"}>{t.type}</span>
-              {actions&&<>
-                <button onClick={()=>setEditTx({...t})} style={{background:"rgba(255,255,255,.07)",border:"none",color:"rgba(232,234,240,.6)",fontSize:11,padding:"3px 10px",borderRadius:7,cursor:"pointer",fontFamily:"DM Sans"}}>Edit</button>
-                <button onClick={()=>setDeleteTx(t)} style={{background:"rgba(255,107,107,.1)",border:"none",color:"#FF6B6B",fontSize:11,padding:"3px 10px",borderRadius:7,cursor:"pointer",fontFamily:"DM Sans"}}>Delete</button>
-              </>}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  const EditSheet=({tx,onSave,onClose})=>(
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet fade" onClick={e=>e.stopPropagation()}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-          <div style={{fontFamily:"Syne,sans-serif",fontSize:18,fontWeight:800}}>{tx.id?.startsWith("tx_")?"Edit Transaction":"Confirm Transaction"}</div>
-          <button onClick={onClose} style={{background:"rgba(255,255,255,.08)",border:"none",color:"#E8EAF0",width:36,height:36,borderRadius:10,cursor:"pointer",fontSize:20}}>×</button>
-        </div>
-        {!tx.id?.startsWith("tx_")&&<div style={{fontSize:12,color:"#00C896",marginBottom:14}}>✦ AI parsed · review and confirm</div>}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
-          <div><div style={{fontSize:11,fontWeight:700,color:"rgba(232,234,240,.4)",marginBottom:6,letterSpacing:".5px"}}>TYPE</div>
-            <select className="field" value={tx.type} onChange={e=>{ const u={...tx,type:e.target.value}; tx.id?.startsWith("tx_")?setEditTx(u):setParsedEntry(u); }}>
-              <option value="income">💰 Income</option><option value="expense">💸 Expense</option>
-            </select>
-          </div>
-          <div><div style={{fontSize:11,fontWeight:700,color:"rgba(232,234,240,.4)",marginBottom:6,letterSpacing:".5px"}}>AMOUNT ({sym})</div>
-            <input className="field" type="number" value={tx.amount} onChange={e=>{ const u={...tx,amount:parseFloat(e.target.value)||0}; tx.id?.startsWith("tx_")?setEditTx(u):setParsedEntry(u); }}/>
-          </div>
-          <div style={{gridColumn:"1/-1"}}><div style={{fontSize:11,fontWeight:700,color:"rgba(232,234,240,.4)",marginBottom:6,letterSpacing:".5px"}}>CATEGORY</div>
-            <select className="field" value={tx.category} onChange={e=>{ const u={...tx,category:e.target.value}; tx.id?.startsWith("tx_")?setEditTx(u):setParsedEntry(u); }}>
-              {ALL_CATS.map(c=><option key={c}>{c}</option>)}
-            </select>
-          </div>
-          <div style={{gridColumn:"1/-1"}}><div style={{fontSize:11,fontWeight:700,color:"rgba(232,234,240,.4)",marginBottom:6,letterSpacing:".5px"}}>NOTE</div>
-            <input className="field" value={tx.note} onChange={e=>{ const u={...tx,note:e.target.value}; tx.id?.startsWith("tx_")?setEditTx(u):setParsedEntry(u); }}/>
-          </div>
-          <div style={{gridColumn:"1/-1"}}><div style={{fontSize:11,fontWeight:700,color:"rgba(232,234,240,.4)",marginBottom:6,letterSpacing:".5px"}}>DATE</div>
-            <input className="field" type="date" value={tx.date} onChange={e=>{ const u={...tx,date:e.target.value}; tx.id?.startsWith("tx_")?setEditTx(u):setParsedEntry(u); }}/>
-          </div>
-        </div>
-        <div style={{display:"flex",gap:10}}>
-          <button className="btn-ghost" onClick={onClose} style={{flex:1}}>Cancel</button>
-          <button className="btn-green" onClick={onSave} style={{flex:2}}>✓ {tx.id?.startsWith("tx_")?"Save Changes":"Add Transaction"}</button>
-        </div>
-      </div>
-    </div>
-  );
-
+  // MAIN APP
   return (
-    <div style={{minHeight:"100vh",background:"#0A0E1A",fontFamily:"'DM Sans',sans-serif",color:"#E8EAF0",position:"relative"}}>
-      <style>{CSS}</style>
-      <div style={{position:"fixed",top:-200,left:-200,width:600,height:600,background:"radial-gradient(circle,rgba(0,200,150,.07) 0%,transparent 70%)",pointerEvents:"none"}}/>
-      <div style={{position:"fixed",bottom:-200,right:-200,width:500,height:500,background:"radial-gradient(circle,rgba(108,99,255,.06) 0%,transparent 70%)",pointerEvents:"none"}}/>
+    <div className="app">
+      <style>{GLOBAL_CSS}</style>
 
       {/* Notification */}
-      {notification&&<div className="fade" style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",zIndex:999,background:notification.type==="error"?"#FF6B6B":notification.type==="warn"?"#FFD93D":"#00C896",color:"#0A0E1A",padding:"12px 22px",borderRadius:14,fontWeight:700,fontSize:14,boxShadow:"0 8px 32px rgba(0,0,0,.4)",whiteSpace:"nowrap",maxWidth:"88vw",textAlign:"center"}}>{notification.msg}</div>}
+      {msg&&<div className="notify" style={{background:msg.type==="error"?"rgba(255,107,107,.95)":"rgba(0,200,150,.95)",color:msg.type==="error"?"#fff":"#0A0E1A"}}>{msg.text}</div>}
 
-      {/* ── Sheets ── */}
-      {showCurrency&&<div className="overlay" onClick={()=>setShowCurrency(false)}><div className="sheet fade" onClick={e=>e.stopPropagation()}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}><div style={{fontFamily:"Syne,sans-serif",fontSize:20,fontWeight:800}}>Choose Currency</div><button onClick={()=>setShowCurrency(false)} style={{background:"rgba(255,255,255,.08)",border:"none",color:"#E8EAF0",width:36,height:36,borderRadius:10,cursor:"pointer",fontSize:20}}>×</button></div>
-        {CURRENCIES.map(c=><div key={c.code} onClick={()=>changeCurrency(c)} style={{display:"flex",alignItems:"center",gap:12,padding:"13px 14px",borderRadius:13,cursor:"pointer",background:currency.code===c.code?"rgba(0,200,150,.1)":"transparent",border:currency.code===c.code?"1px solid rgba(0,200,150,.3)":"1px solid transparent",marginBottom:4}}>
-          <span style={{fontSize:24}}>{c.flag}</span><div style={{flex:1}}><div style={{fontWeight:600}}>{c.name}</div><div style={{fontSize:12,color:"rgba(232,234,240,.4)"}}>{c.code} · {c.symbol}</div></div>
-          {currency.code===c.code&&<span style={{color:"#00C896",fontSize:18,fontWeight:700}}>✓</span>}
-        </div>)}
-      </div></div>}
-
-      {showSettings&&<div className="overlay" onClick={()=>setShowSettings(false)}><div className="sheet fade" onClick={e=>e.stopPropagation()}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><div style={{fontFamily:"Syne,sans-serif",fontSize:20,fontWeight:800}}>Settings</div><button onClick={()=>setShowSettings(false)} style={{background:"rgba(255,255,255,.08)",border:"none",color:"#E8EAF0",width:36,height:36,borderRadius:10,cursor:"pointer",fontSize:20}}>×</button></div>
-        <div className="card" style={{marginBottom:12,padding:18}}>
-          <div style={{display:"flex",alignItems:"center",gap:14}}>
-            <div style={{width:50,height:50,borderRadius:15,background:"linear-gradient(135deg,#00C896,#6C63FF)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,fontWeight:800,color:"#0A0E1A"}}>{currentUser?.name?.[0]?.toUpperCase()}</div>
-            <div><div style={{fontWeight:700,fontSize:16}}>{currentUser?.name}</div><div style={{fontSize:12,color:"rgba(232,234,240,.4)"}}>{currentUser?.email}</div>
-            <span style={{display:"inline-block",marginTop:4,padding:"2px 10px",borderRadius:20,background:"rgba(0,200,150,.15)",color:"#00C896",fontSize:11,fontWeight:700}}>{currentUser?.plan||"free"} plan</span></div>
-          </div>
+      {/* Proactive nudge banner (v5) */}
+      {nudge&&(
+        <div style={{position:"fixed",top:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,zIndex:998,background:nudge.type==="alert"?"rgba(255,107,107,.97)":"rgba(108,99,255,.97)",padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",backdropFilter:"blur(10px)"}}>
+          <div style={{fontSize:13,fontWeight:600,color:"#fff",flex:1,paddingRight:8}}>{nudge.text}</div>
+          <button onClick={()=>setNudge(null)} style={{background:"transparent",border:"none",color:"rgba(255,255,255,.7)",cursor:"pointer",fontSize:18,padding:"0 4px"}}>×</button>
         </div>
-        <div className="card" style={{marginBottom:12,padding:18}}>
-          <div style={{fontSize:11,fontWeight:700,color:"rgba(232,234,240,.4)",letterSpacing:".5px",marginBottom:12}}>DISPLAY CURRENCY</div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:22}}>{currency.flag}</span><div><div style={{fontWeight:600}}>{currency.name}</div><div style={{fontSize:12,color:"rgba(232,234,240,.4)"}}>{currency.code}</div></div></div>
-            <button className="btn-ghost" onClick={()=>{setShowSettings(false);setShowCurrency(true);}} style={{padding:"8px 14px",fontSize:12}}>Change</button>
-          </div>
-        </div>
-        <div className="card" style={{marginBottom:12,padding:18}}>
-          <div style={{fontSize:11,fontWeight:700,color:"rgba(232,234,240,.4)",letterSpacing:".5px",marginBottom:10}}>STATS</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-            {[{l:"Transactions",v:transactions.length},{l:"Income entries",v:transactions.filter(t=>t.type==="income").length}].map(s=>(
-              <div key={s.l} style={{textAlign:"center",padding:12,background:"rgba(255,255,255,.03)",borderRadius:10}}>
-                <div style={{fontFamily:"Syne,sans-serif",fontSize:20,fontWeight:800,color:"#00C896"}}>{s.v}</div>
-                <div style={{fontSize:11,color:"rgba(232,234,240,.4)",marginTop:3}}>{s.l}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <button onClick={()=>{setShowSettings(false);setShowPlans(true);}} style={{width:"100%",padding:14,borderRadius:13,border:"1px solid rgba(108,99,255,.3)",background:"rgba(108,99,255,.08)",color:"#A78BFA",fontFamily:"DM Sans,sans-serif",fontWeight:700,fontSize:15,cursor:"pointer",marginBottom:10}}>✦ Upgrade to Pro</button>
-        <button onClick={handleLogout} style={{width:"100%",padding:14,borderRadius:13,border:"1px solid rgba(255,107,107,.3)",background:"rgba(255,107,107,.08)",color:"#FF6B6B",fontFamily:"DM Sans,sans-serif",fontWeight:700,fontSize:15,cursor:"pointer"}}>Sign Out</button>
-      </div></div>}
-
-      {showPlans&&<div className="overlay" onClick={()=>setShowPlans(false)}><div className="sheet fade" onClick={e=>e.stopPropagation()}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><div style={{fontFamily:"Syne,sans-serif",fontSize:20,fontWeight:800}}>Choose Your Plan</div><button onClick={()=>setShowPlans(false)} style={{background:"rgba(255,255,255,.08)",border:"none",color:"#E8EAF0",width:36,height:36,borderRadius:10,cursor:"pointer",fontSize:20}}>×</button></div>
-        {Object.values(PLANS).map((p,i)=>(
-          <div key={p.name} style={{padding:20,borderRadius:16,border:`2px solid ${p.color}40`,background:`${p.color}08`,marginBottom:12,position:"relative"}}>
-            {i===1&&<div style={{position:"absolute",top:12,right:14,background:p.color,color:"#0A0E1A",fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20}}>POPULAR</div>}
-            <div style={{fontFamily:"Syne,sans-serif",fontSize:20,fontWeight:800,color:p.color,marginBottom:2}}>{p.name}</div>
-            <div style={{fontSize:17,fontWeight:700,marginBottom:14}}>{p.price}</div>
-            {p.features.map(f=><div key={f} style={{fontSize:13,color:"rgba(232,234,240,.65)",marginBottom:6}}>✓ {f}</div>)}
-            <button onClick={()=>{setShowPlans(false);notify(i===0?"You're already on the Free plan ✅":"Pro plan coming soon — stay tuned! 🚀");}} style={{width:"100%",marginTop:14,padding:"12px",borderRadius:12,border:`1px solid ${p.color}`,background:i===1?p.color:"transparent",color:i===1?"#0A0E1A":p.color,fontFamily:"DM Sans,sans-serif",fontWeight:700,fontSize:14,cursor:"pointer"}}>
-              {i===0?"Current Plan":"Get Pro →"}
-            </button>
-          </div>
-        ))}
-      </div></div>}
-
-      {showBudgets&&<div className="overlay" onClick={()=>setShowBudgets(false)}><div className="sheet fade" onClick={e=>e.stopPropagation()}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><div style={{fontFamily:"Syne,sans-serif",fontSize:20,fontWeight:800}}>Monthly Budgets</div><button onClick={()=>setShowBudgets(false)} style={{background:"rgba(255,255,255,.08)",border:"none",color:"#E8EAF0",width:36,height:36,borderRadius:10,cursor:"pointer",fontSize:20}}>×</button></div>
-        <div style={{fontSize:13,color:"rgba(232,234,240,.4)",marginBottom:20}}>Set a spending limit per category. You'll be alerted at 80% and 100%.</div>
-        {CATEGORIES.expense.map(cat=>{ const u=getBudgetUsage(cat); return (
-          <div key={cat} style={{marginBottom:16}}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-              <span style={{fontSize:14,fontWeight:500}}>{cat}</span>
-              {u&&<span style={{fontSize:12,fontWeight:700,color:u.pct>=100?"#FF6B6B":u.pct>=80?"#FFD93D":"#00C896"}}>{sym}{u.spent.toLocaleString()} / {sym}{u.limit.toLocaleString()}</span>}
-            </div>
-            <input className="field" type="number" placeholder={`Limit for ${cat} (${sym})`} value={budgetEdit[cat]??budgets[cat]??""} onChange={e=>setBudgetEdit({...budgetEdit,[cat]:e.target.value})} style={{padding:"10px 14px",fontSize:14}}/>
-            {u&&<div style={{marginTop:5,height:5,background:"rgba(255,255,255,.07)",borderRadius:10}}><div style={{height:"100%",borderRadius:10,background:u.pct>=100?"#FF6B6B":u.pct>=80?"#FFD93D":"#00C896",width:`${u.pct}%`,transition:"width .6s"}}/></div>}
-          </div>
-        ); })}
-        <button className="btn-green" onClick={saveBudgets} style={{marginTop:8}}>Save Budgets</button>
-      </div></div>}
-
-      {showAddSheet&&parsedEntry&&<EditSheet tx={parsedEntry} onSave={confirmAdd} onClose={()=>{setShowAddSheet(false);setParsedEntry(null);}}/>}
-      {editTx&&<EditSheet tx={editTx} onSave={confirmEdit} onClose={()=>setEditTx(null)}/>}
-      {deleteTx&&<div className="overlay" onClick={()=>setDeleteTx(null)}><div className="sheet fade" onClick={e=>e.stopPropagation()} style={{padding:28}}>
-        <div style={{textAlign:"center",marginBottom:22}}><div style={{fontSize:40,marginBottom:12}}>🗑️</div><div style={{fontFamily:"Syne,sans-serif",fontSize:20,fontWeight:800,marginBottom:8}}>Delete this transaction?</div><div style={{fontSize:14,color:"rgba(232,234,240,.5)"}}>"{deleteTx.note}"</div><div style={{fontSize:15,fontWeight:700,color:"#FF6B6B",marginTop:4}}>{sym}{Number(deleteTx.amount).toLocaleString()}</div><div style={{fontSize:13,color:"rgba(232,234,240,.3)",marginTop:6}}>This cannot be undone.</div></div>
-        <div style={{display:"flex",gap:10}}><button className="btn-ghost" onClick={()=>setDeleteTx(null)} style={{flex:1}}>Cancel</button><button onClick={confirmDelete} style={{flex:2,padding:14,borderRadius:13,border:"none",background:"#FF6B6B",color:"#fff",fontFamily:"DM Sans",fontWeight:700,fontSize:15,cursor:"pointer"}}>Delete</button></div>
-      </div></div>}
+      )}
 
       {/* HEADER */}
-      <div style={{padding:"18px 20px 0",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,background:"rgba(10,14,26,.92)",backdropFilter:"blur(16px)",zIndex:10,borderBottom:"1px solid rgba(255,255,255,.05)"}}>
-        <div><div style={{fontFamily:"Syne,sans-serif",fontSize:21,fontWeight:800}}><span style={{color:"#00C896"}}>Moni</span> Tracker</div><div style={{fontSize:11,color:"rgba(232,234,240,.3)"}}>Hi {currentUser?.name?.split(" ")[0]} 👋</div></div>
-        <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <button onClick={fetchInsights} style={{background:"rgba(0,200,150,.1)",border:"1px solid rgba(0,200,150,.2)",borderRadius:11,padding:"8px 13px",color:"#00C896",fontFamily:"DM Sans",fontWeight:700,fontSize:12,cursor:"pointer"}}>✦ AI</button>
-          <button onClick={()=>setShowCurrency(true)} style={{background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",borderRadius:11,padding:"7px 12px",color:"#E8EAF0",fontFamily:"DM Sans",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
-            <span>{currency.flag}</span><span style={{fontWeight:700}}>{currency.code}</span>
-          </button>
-          <button onClick={()=>setShowSettings(true)} style={{background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.1)",borderRadius:11,width:37,height:37,cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",color:"#E8EAF0"}}>⚙</button>
+      <div style={{padding:"16px 20px 10px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,background:"rgba(10,14,26,.95)",backdropFilter:"blur(20px)",zIndex:100,borderBottom:"1px solid rgba(255,255,255,.05)"}}>
+        <div>
+          <div style={{fontFamily:"Syne,sans-serif",fontSize:20,fontWeight:800,color:"#00C896"}}>Moni</div>
+          <div style={{fontSize:10,color:"rgba(232,234,240,.3)",letterSpacing:1.5}}>TRACKER</div>
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <select value={currency} onChange={e=>setCurrency(e.target.value)} style={{background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,padding:"6px 10px",color:"#E8EAF0",fontFamily:"DM Sans",fontSize:13,cursor:"pointer"}}>
+            {Object.entries(CURRENCIES).map(([k,v])=><option key={k} value={k}>{v.sym} {k}</option>)}
+          </select>
+          <button onClick={()=>setShowSettings(true)} style={{background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.1)",borderRadius:10,padding:"6px 11px",color:"rgba(232,234,240,.6)",fontFamily:"DM Sans",fontSize:13,cursor:"pointer"}}>⚙️</button>
         </div>
       </div>
 
       {/* CONTENT */}
-      <div style={{padding:"18px 20px 100px",maxWidth:480,margin:"0 auto"}}>
+      <div style={{padding:"14px 16px",paddingBottom:90,paddingTop: nudge ? 60 : 14}}>
 
         {/* ── DASHBOARD ── */}
         {tab==="dashboard"&&<div className="fade">
           {/* Balance card */}
-          <div style={{background:"linear-gradient(135deg,#00C896,#009e76)",borderRadius:22,padding:"24px 24px 22px",marginBottom:16,position:"relative",overflow:"hidden"}}>
-            <div style={{position:"absolute",top:-30,right:-30,width:140,height:140,background:"rgba(255,255,255,.08)",borderRadius:"50%"}}/>
-            <div style={{position:"absolute",bottom:-40,left:50,width:110,height:110,background:"rgba(255,255,255,.05)",borderRadius:"50%"}}/>
-            <div style={{fontSize:11,fontWeight:700,color:"rgba(10,14,26,.6)",letterSpacing:".5px",marginBottom:6}}>TOTAL BALANCE</div>
-            <div style={{fontFamily:"Syne,sans-serif",fontSize:36,fontWeight:800,color:"#0A0E1A",letterSpacing:"-1px"}}>{fmt(balance,sym)}</div>
-            <div style={{display:"flex",gap:12,marginTop:16,flexWrap:"wrap"}}>
-              {[{l:"INCOME",v:fmt(totalIncome,sym),e:"↑"},{l:"EXPENSES",v:fmt(totalExpense,sym),e:"↓"},{l:"SAVE RATE",v:`${saveRate}%`,e:"★"}].map(s=>(
-                <div key={s.l} style={{background:"rgba(10,14,26,.18)",borderRadius:11,padding:"9px 13px"}}>
-                  <div style={{fontSize:9,color:"rgba(10,14,26,.55)",fontWeight:700,marginBottom:2}}>{s.e} {s.l}</div>
-                  <div style={{fontSize:15,fontWeight:700,color:"#0A0E1A"}}>{s.v}</div>
-                </div>
-              ))}
+          <div style={{background:"linear-gradient(135deg,#00C896 0%,#059669 100%)",borderRadius:22,padding:"22px 22px 18px",marginBottom:14,position:"relative",overflow:"hidden"}}>
+            <div style={{position:"absolute",top:-20,right:-20,width:120,height:120,background:"rgba(255,255,255,.08)",borderRadius:"50%"}}/>
+            <div style={{fontSize:12,fontWeight:700,color:"rgba(10,14,26,.6)",letterSpacing:1.5,textTransform:"uppercase",marginBottom:6}}>Total Balance</div>
+            <div style={{fontFamily:"Syne,sans-serif",fontSize:36,fontWeight:800,color:"#0A0E1A",marginBottom:14}}>{sym}{Math.abs(balance).toLocaleString("en-NG")}</div>
+            <div style={{display:"flex",gap:20}}>
+              <div><div style={{fontSize:11,color:"rgba(10,14,26,.5)",marginBottom:2}}>Income</div><div style={{fontSize:15,fontWeight:700,color:"#0A0E1A"}}>↑ {sym}{totalIncome.toLocaleString("en-NG")}</div></div>
+              <div><div style={{fontSize:11,color:"rgba(10,14,26,.5)",marginBottom:2}}>Expenses</div><div style={{fontSize:15,fontWeight:700,color:"#0A0E1A"}}>↓ {sym}{totalExpense.toLocaleString("en-NG")}</div></div>
+              <div><div style={{fontSize:11,color:"rgba(10,14,26,.5)",marginBottom:2}}>Save Rate</div><div style={{fontSize:15,fontWeight:700,color:"#0A0E1A"}}>{saveRate}%</div></div>
             </div>
+          </div>
+
+          {/* Period filter */}
+          <div style={{display:"flex",gap:7,marginBottom:14}}>
+            {["weekly","monthly","yearly"].map(p=>(
+              <button key={p} onClick={()=>setReportPeriod(p)} style={{flex:1,padding:"8px",borderRadius:10,border:"none",background:reportPeriod===p?"rgba(0,200,150,.2)":"rgba(255,255,255,.05)",color:reportPeriod===p?"#00C896":"rgba(232,234,240,.5)",fontFamily:"DM Sans",fontWeight:700,fontSize:11,cursor:"pointer",textTransform:"capitalize",transition:"all .2s"}}>{p}</button>
+            ))}
           </div>
 
           {/* Budget alerts */}
           {CATEGORIES.expense.filter(c=>{ const u=getBudgetUsage(c); return u&&u.pct>=80; }).slice(0,2).map(c=>{ const u=getBudgetUsage(c); return (
             <div key={c} style={{background:u.pct>=100?"rgba(255,107,107,.08)":"rgba(255,217,61,.08)",border:`1px solid ${u.pct>=100?"rgba(255,107,107,.3)":"rgba(255,217,61,.3)"}`,borderRadius:13,padding:"11px 15px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <span style={{fontSize:13,fontWeight:600,color:u.pct>=100?"#FF6B6B":"#FFD93D"}}>{u.pct>=100?"🚨":"⚠️"} {c} {u.pct>=100?"exceeded":"alert"}</span>
+              <span style={{fontSize:13,fontWeight:600,color:u.pct>=100?"#FF6B6B":"#FFD93D"}}>{u.pct>=100?"🚨":"⚠️"} {c} {u.pct>=100?"exceeded!":"at "+u.pct+"%"}</span>
               <span style={{fontSize:12,color:"rgba(232,234,240,.5)"}}>{sym}{u.spent.toLocaleString()} / {sym}{u.limit.toLocaleString()}</span>
             </div>
           ); })}
 
-          {/* Input box */}
+          {/* INPUT BOX */}
           <div className="card" style={{marginBottom:16}}>
             <div className="section-label">ADD TRANSACTION</div>
-            <textarea className="field" rows={2} placeholder={`"Spent ${sym}5k on food" · "Received ${sym}150k salary"`} value={inputText} onChange={e=>setInputText(e.target.value)}/>
-            {voiceStatus&&<div style={{fontSize:12,color:recording?"#FF6B6B":"#00C896",marginTop:8,display:"flex",alignItems:"center",gap:6}}>
+            <textarea className="field" rows={2}
+              placeholder={`Try: "Bought iPhone 16 for ₦3 million" · "Received ₦150k salary"`}
+              value={inputText}
+              onChange={e=>{ setInputText(e.target.value); setVoiceReview(null); }}
+            />
+
+            {/* v5: Live transcript while recording */}
+            {recording && liveTranscript && (
+              <div style={{fontSize:13,color:"rgba(0,200,150,.8)",marginTop:8,padding:"8px 12px",background:"rgba(0,200,150,.06)",borderRadius:10,fontStyle:"italic"}}>
+                🎙️ "{liveTranscript}"
+              </div>
+            )}
+
+            {/* v5: Voice status */}
+            {voiceStatus&&!voiceReview&&<div style={{fontSize:12,color:recording?"#FF6B6B":"#00C896",marginTop:8,display:"flex",alignItems:"center",gap:6}}>
               {recording&&<span className="pulse">🔴</span>} {voiceStatus}
             </div>}
+
+            {/* v5: Review step after voice capture */}
+            {voiceReview&&(
+              <div className="voice-review">
+                <div style={{fontSize:12,color:"rgba(0,200,150,.8)",fontWeight:700,marginBottom:6}}>✅ I heard you say:</div>
+                <div style={{fontSize:14,color:"#E8EAF0",marginBottom:10,lineHeight:1.6}}>"{voiceReview}"</div>
+                <div style={{fontSize:12,color:"rgba(232,234,240,.45)",marginBottom:10}}>You can edit the text above if needed, then tap "Add with AI"</div>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={handleVoice} className="btn-ghost" style={{flex:1,fontSize:13,padding:"9px"}}>🎙️ Re-record</button>
+                  <button onClick={()=>{setVoiceReview(null);setInputText("");setVoiceStatus("");}} className="btn-ghost" style={{flex:1,fontSize:13,padding:"9px",color:"#FF6B6B",borderColor:"rgba(255,107,107,.3)"}}>✕ Cancel</button>
+                </div>
+              </div>
+            )}
+
             <div style={{display:"flex",gap:10,marginTop:10}}>
-              <button className="btn-ghost" onClick={handleVoice} style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:7,padding:"11px",borderColor:recording?"rgba(255,107,107,.4)":"rgba(255,255,255,.15)",color:recording?"#FF6B6B":"#E8EAF0"}}>
+              <button className="btn-ghost" onClick={handleVoice}
+                style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:7,padding:"11px",borderColor:recording?"rgba(255,107,107,.4)":"rgba(255,255,255,.15)",color:recording?"#FF6B6B":"#E8EAF0"}}>
                 <span style={{fontSize:17}}>{recording?"⏹":"🎙️"}</span>
                 <span style={{fontSize:13}}>{recording?"Stop":"Voice"}</span>
               </button>
-              <button className="btn-green" onClick={handleProcess} disabled={!inputText.trim()||processing} style={{flex:2,borderRadius:12,padding:"11px",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+              <button className="btn-green" onClick={handleProcess} disabled={!inputText.trim()||processing}
+                style={{flex:2,borderRadius:12,padding:"11px",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
                 {processing?<><span className="spin">⟳</span> Processing...</>:<>✦ Add with AI</>}
               </button>
             </div>
             {/* Quick tags */}
             <div style={{display:"flex",gap:7,marginTop:10,flexWrap:"wrap"}}>
-              {["Food","Transport","Salary","Shopping"].map(c=>(
-                <button key={c} onClick={()=>setInputText(`Spent on ${c}`)} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.09)",borderRadius:20,padding:"6px 12px",color:"rgba(232,234,240,.65)",fontFamily:"DM Sans",fontSize:12,cursor:"pointer"}}>+ {c}</button>
+              {["Food","Transport","Salary","Electronics"].map(c=>(
+                <button key={c} onClick={()=>setInputText(`Spent on ${c}`)}
+                  style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.09)",borderRadius:20,padding:"6px 12px",color:"rgba(232,234,240,.65)",fontFamily:"DM Sans",fontSize:12,cursor:"pointer"}}>+ {c}</button>
               ))}
             </div>
           </div>
 
-          {/* Empty state for new users */}
+          {/* Empty state */}
           {transactions.length===0&&(
-            <div style={{textAlign:"center",padding:"40px 20px"}}>
+            <div style={{textAlign:"center",padding:"36px 20px"}}>
               <div style={{fontSize:48,marginBottom:16}}>📊</div>
-              <div style={{fontFamily:"Syne,sans-serif",fontSize:20,fontWeight:800,marginBottom:8}}>Your balance starts at zero</div>
-              <div style={{fontSize:14,color:"rgba(232,234,240,.4)",lineHeight:1.7}}>Add your first income or expense above to get started. Try saying: <span style={{color:"#00C896"}}>"Received {sym}50,000 salary"</span></div>
+              <div style={{fontFamily:"Syne,sans-serif",fontSize:20,fontWeight:800,marginBottom:8}}>Start tracking your money</div>
+              <div style={{fontSize:14,color:"rgba(232,234,240,.4)",lineHeight:1.7}}>Try typing or saying: <span style={{color:"#00C896"}}>"Received ₦50,000 salary"</span> or <span style={{color:"#00C896"}}>"Bought iPhone 16 for 3 million"</span></div>
             </div>
           )}
 
@@ -786,7 +765,7 @@ export default function MoniTracker() {
               <div className="section-label" style={{marginBottom:0}}>RECENT</div>
               <button onClick={()=>setTab("transactions")} style={{background:"transparent",border:"none",color:"#00C896",fontSize:12,cursor:"pointer",fontFamily:"DM Sans",fontWeight:700}}>See all →</button>
             </div>
-            {transactions.slice(0,5).map(t=><TxCard key={t.id} t={t}/>)}
+            {transactions.slice(0,5).map(t=><TxCard key={t.id} t={t} sym={sym} onEdit={setEditTx} onDelete={deleteTx}/>)}
           </>}
         </div>}
 
@@ -803,7 +782,7 @@ export default function MoniTracker() {
           {filtered.length===0&&<div style={{textAlign:"center",padding:"40px 20px",color:"rgba(232,234,240,.35)"}}>
             <div style={{fontSize:36,marginBottom:10}}>📭</div>No transactions yet. Add one from the Home tab!
           </div>}
-          {filtered.map(t=><TxCard key={t.id} t={t}/>)}
+          {filtered.map(t=><TxCard key={t.id} t={t} sym={sym} onEdit={setEditTx} onDelete={deleteTx}/>)}
         </div>}
 
         {/* ── REPORTS ── */}
@@ -813,8 +792,8 @@ export default function MoniTracker() {
               <button key={p} onClick={()=>setReportPeriod(p)} style={{flex:1,padding:"9px",borderRadius:11,border:"none",background:reportPeriod===p?"#00C896":"rgba(255,255,255,.06)",color:reportPeriod===p?"#0A0E1A":"#E8EAF0",fontFamily:"DM Sans",fontWeight:700,fontSize:12,cursor:"pointer",textTransform:"capitalize",transition:"all .2s"}}>{p}</button>
             ))}
           </div>
-          <button onClick={()=>exportPDF(transactions,currency,reportPeriod,currentUser?.name||"User")} style={{width:"100%",marginBottom:14,padding:"13px",borderRadius:13,border:"1px solid rgba(0,200,150,.3)",background:"rgba(0,200,150,.07)",color:"#00C896",fontFamily:"DM Sans",fontWeight:700,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}>
-            📄 Export {reportPeriod.charAt(0).toUpperCase()+reportPeriod.slice(1)} Report as PDF
+          <button onClick={exportPDF} style={{width:"100%",marginBottom:14,padding:"13px",borderRadius:13,border:"1px solid rgba(0,200,150,.3)",background:"rgba(0,200,150,.07)",color:"#00C896",fontFamily:"DM Sans",fontWeight:700,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}>
+            📄 Export {reportPeriod} Report as PDF
           </button>
           <button onClick={()=>setShowBudgets(true)} style={{width:"100%",marginBottom:16,padding:"13px",borderRadius:13,border:"1px solid rgba(108,99,255,.3)",background:"rgba(108,99,255,.07)",color:"#A78BFA",fontFamily:"DM Sans",fontWeight:700,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}>
             🎯 Manage Monthly Budgets
@@ -824,7 +803,7 @@ export default function MoniTracker() {
           </div>}
           {transactions.length>0&&<>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-              {[{l:"Income",v:fmt(totalIncome,sym),c:"#00C896",i:"↑"},{l:"Expenses",v:fmt(totalExpense,sym),c:"#FF6B6B",i:"↓"},{l:"Balance",v:fmt(balance,sym),c:"#6C63FF",i:"★"},{l:"Save Rate",v:`${saveRate}%`,c:"#FFD93D",i:"%"}].map(s=>(
+              {[{l:"Income",v:fmt(totalIncome,sym),c:"#00C896",i:"↑"},{l:"Expenses",v:fmt(totalExpense,sym),c:"#FF6B6B",i:"↓"},{l:"Balance",v:fmt(balance,sym),c:balance>=0?"#6C63FF":"#FF6B6B",i:"★"},{l:"Save Rate",v:`${saveRate}%`,c:"#FFD93D",i:"%"}].map(s=>(
                 <div key={s.l} className="card" style={{textAlign:"center",padding:16}}>
                   <div style={{fontSize:18,color:s.c,marginBottom:4}}>{s.i}</div>
                   <div style={{fontFamily:"Syne,sans-serif",fontSize:18,fontWeight:800,color:s.c}}>{s.v}</div>
@@ -834,16 +813,24 @@ export default function MoniTracker() {
             </div>
             {expenseCats.length>0&&<div className="card" style={{marginBottom:12}}>
               <div className="section-label">EXPENSE BREAKDOWN</div>
-              <ResponsiveContainer width="100%" height={185}><PieChart><Pie data={expenseCats} cx="50%" cy="50%" innerRadius={50} outerRadius={78} paddingAngle={3} dataKey="value">{expenseCats.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}</Pie><Tooltip formatter={v=>`${sym}${v.toLocaleString()}`} contentStyle={{background:"#1A1F2E",border:"none",borderRadius:10,color:"#E8EAF0"}}/></PieChart></ResponsiveContainer>
+              <ResponsiveContainer width="100%" height={185}>
+                <PieChart><Pie data={expenseCats} cx="50%" cy="50%" innerRadius={50} outerRadius={78} paddingAngle={3} dataKey="value">
+                  {expenseCats.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}
+                </Pie><Tooltip formatter={v=>`${sym}${v.toLocaleString()}`} contentStyle={{background:"#1A1F2E",border:"none",borderRadius:10,color:"#E8EAF0"}}/></PieChart>
+              </ResponsiveContainer>
               {expenseCats.slice(0,5).map((c,i)=><div key={c.name} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}><div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:10,height:10,borderRadius:3,background:COLORS[i%COLORS.length]}}/><span style={{fontSize:13}}>{c.name}</span></div><span style={{fontSize:13,fontWeight:700}}>{sym}{c.value.toLocaleString()}</span></div>)}
             </div>}
             <div className="card" style={{marginBottom:12}}>
-              <div className="section-label">INCOME VS EXPENSES BY DAY</div>
-              <ResponsiveContainer width="100%" height={170}><BarChart data={getBarData()} barSize={12}><XAxis dataKey="day" tick={{fill:"rgba(232,234,240,.4)",fontSize:11}} axisLine={false} tickLine={false}/><YAxis hide/><Tooltip contentStyle={{background:"#1A1F2E",border:"none",borderRadius:10,color:"#E8EAF0"}} formatter={v=>`${sym}${v.toLocaleString()}`}/><Bar dataKey="income" fill="#00C896" radius={[5,5,0,0]} name="Income"/><Bar dataKey="expense" fill="#FF6B6B" radius={[5,5,0,0]} name="Expense"/><Legend wrapperStyle={{fontSize:12,color:"rgba(232,234,240,.4)"}}/></BarChart></ResponsiveContainer>
+              <div className="section-label">INCOME VS EXPENSES (7 DAYS)</div>
+              <ResponsiveContainer width="100%" height={170}>
+                <BarChart data={getBarData()} barSize={12}><XAxis dataKey="day" tick={{fill:"rgba(232,234,240,.4)",fontSize:11}} axisLine={false} tickLine={false}/><YAxis hide/><Tooltip contentStyle={{background:"#1A1F2E",border:"none",borderRadius:10,color:"#E8EAF0"}} formatter={v=>`${sym}${v.toLocaleString()}`}/><Bar dataKey="income" fill="#00C896" radius={[5,5,0,0]} name="Income"/><Bar dataKey="expense" fill="#FF6B6B" radius={[5,5,0,0]} name="Expense"/><Legend wrapperStyle={{fontSize:12,color:"rgba(232,234,240,.4)"}}/></BarChart>
+              </ResponsiveContainer>
             </div>
             <div className="card">
               <div className="section-label">6-MONTH BALANCE TREND</div>
-              <ResponsiveContainer width="100%" height={150}><LineChart data={getTrendData()}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.04)"/><XAxis dataKey="month" tick={{fill:"rgba(232,234,240,.4)",fontSize:11}} axisLine={false} tickLine={false}/><YAxis hide/><Tooltip contentStyle={{background:"#1A1F2E",border:"none",borderRadius:10,color:"#E8EAF0"}} formatter={v=>`${sym}${v.toLocaleString()}`}/><Line type="monotone" dataKey="balance" stroke="#6C63FF" strokeWidth={2.5} dot={{fill:"#6C63FF",r:3}}/></LineChart></ResponsiveContainer>
+              <ResponsiveContainer width="100%" height={150}>
+                <LineChart data={getTrendData()}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.04)"/><XAxis dataKey="month" tick={{fill:"rgba(232,234,240,.4)",fontSize:11}} axisLine={false} tickLine={false}/><YAxis hide/><Tooltip contentStyle={{background:"#1A1F2E",border:"none",borderRadius:10,color:"#E8EAF0"}} formatter={v=>`${sym}${v.toLocaleString()}`}/><Line type="monotone" dataKey="balance" stroke="#6C63FF" strokeWidth={2.5} dot={{fill:"#6C63FF",r:3}}/></LineChart>
+              </ResponsiveContainer>
             </div>
           </>}
         </div>}
@@ -866,21 +853,23 @@ export default function MoniTracker() {
               <button className="btn-ghost" onClick={fetchInsights} style={{marginTop:14,width:"100%",fontSize:13}}>↻ Refresh Insights</button>
             </>}
             {!aiLoading&&!aiError&&!aiInsight&&<div style={{textAlign:"center",padding:24}}>
-              <div style={{fontSize:13,color:"rgba(232,234,240,.4)",marginBottom:16}}>{transactions.length===0?"Add some transactions first, then get personalised AI analysis.":"Get personalised AI analysis of your spending habits."}</div>
+              <div style={{fontSize:13,color:"rgba(232,234,240,.4)",marginBottom:16}}>{transactions.length===0?"Add some transactions first, then get personalised AI analysis.":"Tap below to get your personalised AI financial advice."}</div>
               <button className="btn-green" onClick={fetchInsights} disabled={transactions.length===0} style={{borderRadius:12,padding:"12px 24px",width:"auto"}}>Get My Insights ✨</button>
             </div>}
           </div>
+
           {/* Budget overview */}
           {Object.keys(budgets).length>0&&<div className="card" style={{marginBottom:12}}>
             <div className="section-label">BUDGET TRACKER</div>
             {Object.keys(budgets).map((cat,i)=>{ const u=getBudgetUsage(cat); if(!u) return null; return (
               <div key={cat} style={{marginBottom:14}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}><span style={{fontSize:13}}>{cat}</span><span style={{fontSize:12,fontWeight:700,color:u.pct>=100?"#FF6B6B":u.pct>=80?"#FFD93D":"#00C896"}}>{sym}{u.spent.toLocaleString()} / {sym}{u.limit.toLocaleString()}</span></div>
-                <div style={{height:7,background:"rgba(255,255,255,.07)",borderRadius:10}}><div style={{height:"100%",borderRadius:10,background:u.pct>=100?"#FF6B6B":u.pct>=80?"#FFD93D":COLORS[i%COLORS.length],width:`${u.pct}%`,transition:"width .8s"}}/></div>
+                <div style={{height:7,background:"rgba(255,255,255,.07)",borderRadius:10}}><div style={{height:"100%",borderRadius:10,background:u.pct>=100?"#FF6B6B":u.pct>=80?"#FFD93D":COLORS[i%COLORS.length],width:`${Math.min(u.pct,100)}%`,transition:"width .8s"}}/></div>
               </div>
             ); })}
             <button onClick={()=>setShowBudgets(true)} className="btn-ghost" style={{width:"100%",fontSize:13,marginTop:4}}>Edit Budgets</button>
           </div>}
+
           {expenseCats.length>0&&<div className="card">
             <div className="section-label">TOP SPENDING</div>
             {expenseCats.slice(0,5).map((c,i)=>(
@@ -897,13 +886,99 @@ export default function MoniTracker() {
       </div>
 
       {/* BOTTOM NAV */}
-      <div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(10,14,26,.96)",backdropFilter:"blur(20px)",borderTop:"1px solid rgba(255,255,255,.06)",padding:"6px 0 14px",display:"flex",justifyContent:"space-around"}}>
+      <div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(10,14,26,.96)",backdropFilter:"blur(20px)",borderTop:"1px solid rgba(255,255,255,.06)",padding:"6px 0 14px",display:"flex",justifyContent:"space-around",zIndex:100}}>
         {[{id:"dashboard",icon:"⊞",l:"Home"},{id:"transactions",icon:"↕",l:"History"},{id:"reports",icon:"◎",l:"Reports"},{id:"insights",icon:"✦",l:"Insights"}].map(n=>(
           <button key={n.id} className={`nav-btn ${tab===n.id?"active":""}`} onClick={()=>setTab(n.id)}>
             <span style={{fontSize:20}}>{n.icon}</span><span>{n.l}</span>
           </button>
         ))}
       </div>
+
+      {/* EDIT MODAL */}
+      {editTx&&(
+        <div className="modal-bg" onClick={()=>setEditTx(null)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div style={{fontFamily:"Syne,sans-serif",fontSize:18,fontWeight:800,marginBottom:18}}>Edit Transaction</div>
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:12,color:"rgba(232,234,240,.4)",marginBottom:6}}>NOTE</div>
+              <input className="field" value={editTx.note} onChange={e=>setEditTx(p=>({...p,note:e.target.value}))}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:12,color:"rgba(232,234,240,.4)",marginBottom:6}}>AMOUNT ({sym})</div>
+              <input className="field" type="number" value={editTx.amount} onChange={e=>setEditTx(p=>({...p,amount:parseFloat(e.target.value)||0}))}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:12,color:"rgba(232,234,240,.4)",marginBottom:6}}>TYPE</div>
+              <select className="field" value={editTx.type} onChange={e=>setEditTx(p=>({...p,type:e.target.value}))}>
+                <option value="income">Income</option>
+                <option value="expense">Expense</option>
+              </select>
+            </div>
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:12,color:"rgba(232,234,240,.4)",marginBottom:6}}>CATEGORY</div>
+              <select className="field" value={editTx.category} onChange={e=>setEditTx(p=>({...p,category:e.target.value}))}>
+                {[...CATEGORIES.income,...CATEGORIES.expense].map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div style={{marginBottom:18}}>
+              <div style={{fontSize:12,color:"rgba(232,234,240,.4)",marginBottom:6}}>DATE</div>
+              <input className="field" type="date" value={editTx.date} onChange={e=>setEditTx(p=>({...p,date:e.target.value}))}/>
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button className="btn-ghost" onClick={()=>setEditTx(null)} style={{flex:1}}>Cancel</button>
+              <button className="btn-green" onClick={saveEdit} style={{flex:2}}>Save Changes</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BUDGETS MODAL */}
+      {showBudgets&&(
+        <div className="modal-bg" onClick={()=>setShowBudgets(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div style={{fontFamily:"Syne,sans-serif",fontSize:18,fontWeight:800,marginBottom:6}}>Monthly Budgets 🎯</div>
+            <div style={{fontSize:12,color:"rgba(232,234,240,.4)",marginBottom:18}}>Set spending limits to get alerts</div>
+            {CATEGORIES.expense.map(cat=>(
+              <div key={cat} style={{marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+                <div style={{flex:1,fontSize:13}}>{cat}</div>
+                <input className="field" type="number" placeholder="0"
+                  value={budgets[cat]||""}
+                  onChange={e=>{ const v=parseFloat(e.target.value)||0; setBudgets(prev=>v?{...prev,[cat]:v}:(({[cat]:_,...rest})=>rest)(prev)); }}
+                  style={{width:130,padding:"9px 12px",fontSize:13}}
+                />
+              </div>
+            ))}
+            <button className="btn-green" onClick={()=>setShowBudgets(false)} style={{marginTop:6}}>Save Budgets</button>
+          </div>
+        </div>
+      )}
+
+      {/* SETTINGS MODAL */}
+      {showSettings&&(
+        <div className="modal-bg" onClick={()=>setShowSettings(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div style={{fontFamily:"Syne,sans-serif",fontSize:18,fontWeight:800,marginBottom:18}}>Settings ⚙️</div>
+            <div style={{marginBottom:14,padding:"13px 15px",background:"rgba(255,255,255,.04)",borderRadius:12}}>
+              <div style={{fontSize:13,fontWeight:700,marginBottom:2}}>{currentUser?.name}</div>
+              <div style={{fontSize:12,color:"rgba(232,234,240,.4)"}}>{currentUser?.email}</div>
+            </div>
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:12,color:"rgba(232,234,240,.4)",marginBottom:6,fontWeight:600}}>ANTHROPIC API KEY (for AI features)</div>
+              <input className="field" type="password" placeholder="sk-ant-..." value={apiKey}
+                onChange={e=>{ setApiKey(e.target.value); safeSet("moni_apikey",e.target.value); }}/>
+              <div style={{fontSize:11,color:"rgba(232,234,240,.3)",marginTop:5,lineHeight:1.6}}>Add your key from console.anthropic.com to enable AI insights. Your key stays on your device only.</div>
+            </div>
+            <div style={{marginBottom:18}}>
+              <div style={{fontSize:12,color:"rgba(232,234,240,.4)",marginBottom:6,fontWeight:600}}>CURRENCY</div>
+              <select className="field" value={currency} onChange={e=>setCurrency(e.target.value)}>
+                {Object.entries(CURRENCIES).map(([k,v])=><option key={k} value={k}>{v.sym} — {v.name}</option>)}
+              </select>
+            </div>
+            <button onClick={doLogout} style={{width:"100%",padding:"12px",borderRadius:13,border:"1px solid rgba(255,107,107,.3)",background:"rgba(255,107,107,.07)",color:"#FF6B6B",fontFamily:"DM Sans",fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>Sign Out</button>
+            <button className="btn-ghost" onClick={()=>setShowSettings(false)} style={{width:"100%"}}>Close</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
